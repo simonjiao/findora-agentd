@@ -1,13 +1,21 @@
 use bip0039::{Count, Language, Mnemonic};
 use bip32::{DerivationPath, XPrv};
 use libsecp256k1::{PublicKey, SecretKey};
+use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::str::FromStr;
+use std::time::Duration;
 use tokio::runtime::Runtime;
-use web3::transports::Http;
-use web3::types::{Address, BlockNumber, Bytes, TransactionId, TransactionParameters, H160, H256, U256, U64};
+use web3::{
+    transports::Http,
+    types::{
+        Address, BlockNumber, Bytes, Transaction, TransactionId, TransactionParameters, TransactionReceipt, H160, H256,
+        U256, U64,
+    },
+};
 
 const FRC20_ADDRESS: u64 = 0x1000;
+const BLOCK_TIME: u64 = 16;
 
 //const WEB3_SRV: &str = "http://127.0.0.1:8545";
 const WEB3_SRV: &str = "http://18.236.205.22:8545";
@@ -41,23 +49,40 @@ fn one_eth_key() -> KeyPair {
     }
 }
 
+#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+struct TransferMetrics {
+    from: Address,
+    to: Address,
+    amount: U256,
+    hash: Option<H256>, // Tx hash
+    status: u64,        // 1 - success, 0 - fail
+    wait: u64,          // seconds for waiting tx receipt
+}
+
 struct TestCLient {
     web3: web3::Web3<Http>,
     root_sk: secp256k1::SecretKey,
+    root_addr: Address,
     rt: Runtime,
 }
 
 impl TestCLient {
-    pub fn setup(url: Option<&str>, root_sk: Option<&str>) -> Self {
+    pub fn setup(url: Option<&str>, root_sk: Option<&str>, root_addr: Option<&str>) -> Self {
         let transport = web3::transports::Http::new(url.unwrap_or(WEB3_SRV)).unwrap();
         let web3 = web3::Web3::new(transport);
         let root_sk = secp256k1::SecretKey::from_str(root_sk.unwrap_or(ROOT_SK)).unwrap();
+        let root_addr = Address::from_str(root_addr.unwrap_or(ROOT_ADDR)).unwrap();
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
 
-        Self { web3, root_sk, rt }
+        Self {
+            web3,
+            root_sk,
+            root_addr,
+            rt,
+        }
     }
 
     pub fn chain_id(&self) -> Option<U256> {
@@ -79,6 +104,17 @@ impl TestCLient {
     }
 
     #[allow(unused)]
+    pub fn transaction(&self, id: TransactionId) -> Option<Transaction> {
+        self.rt.block_on(self.web3.eth().transaction(id)).unwrap_or_default()
+    }
+
+    pub fn transaction_receipt(&self, hash: H256) -> Option<TransactionReceipt> {
+        self.rt
+            .block_on(self.web3.eth().transaction_receipt(hash))
+            .unwrap_or_default()
+    }
+
+    #[allow(unused)]
     pub fn accounts(&self) -> Vec<Address> {
         self.rt.block_on(self.web3.eth().accounts()).unwrap_or_default()
     }
@@ -89,48 +125,75 @@ impl TestCLient {
             .unwrap_or_default()
     }
 
-    pub fn distribution(&self, accounts: &[&str], amounts: &[u64]) -> web3::Result<()> {
-        let results = accounts
+    pub fn distribution(&self, accounts: &[&str], amounts: &[U256]) -> web3::Result<Vec<TransferMetrics>> {
+        let mut results = vec![];
+        let mut succeed = 0u64;
+        let mut idx = 1u64;
+        let total = accounts.len();
+        accounts
             .iter()
             .zip(amounts)
-            .map(|(&account, &am)| TransactionParameters {
-                to: Some(Address::from_str(account).unwrap()),
-                value: U256::from(am),
-                ..Default::default()
+            .map(|(&account, &am)| {
+                let to = Some(Address::from_str(account).unwrap());
+                let tm = TransferMetrics {
+                    from: self.root_addr,
+                    to: to.unwrap(),
+                    amount: am,
+                    ..Default::default()
+                };
+                let tp = TransactionParameters {
+                    to,
+                    value: am,
+                    ..Default::default()
+                };
+                (tp, tm)
             })
             // Sign the txs (can be done offline)
-            .filter_map(|tx_object| {
-                self.rt
+            .for_each(|(tx_object, mut metric)| {
+                if let Ok(signed) = self
+                    .rt
                     .block_on(self.web3.accounts().sign_transaction(tx_object, &self.root_sk))
-                    .ok()
-            })
-            // Send the txs to infra
-            .filter_map(|signed| {
-                self.rt
-                    .block_on(self.web3.eth().send_raw_transaction(signed.raw_transaction))
-                    .ok()
-            })
-            .collect::<Vec<_>>();
+                {
+                    if let Ok(hash) = self
+                        .rt
+                        .block_on(self.web3.eth().send_raw_transaction(signed.raw_transaction))
+                    {
+                        metric.hash = Some(hash);
+                        let mut retry = BLOCK_TIME * 3 + 1;
+                        loop {
+                            if let Some(receipt) = self.transaction_receipt(hash) {
+                                if let Some(status) = receipt.status {
+                                    if status == U64::from(1u64) {
+                                        succeed += 1;
+                                        metric.status = 1;
+                                    }
+                                }
+                                metric.wait = BLOCK_TIME * 2 + 2 - retry;
+                                break;
+                            } else {
+                                std::thread::sleep(Duration::from_secs(1));
+                                retry -= 1;
+                                if retry == 0 {
+                                    metric.wait = BLOCK_TIME * 2 + 1;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                println!("{}/{} {:?} {}", idx, total, metric.to, metric.status == 1);
+                idx += 1;
+                results.push(metric);
+            });
 
-        println!("Tx succeeded with hash: {}", results.len());
-        results.into_iter().for_each(|result| {
-            println!(
-                "Tx receipt: {:?}",
-                self.rt.block_on(self.web3.eth().transaction_receipt(result))
-            );
-            println!(
-                "Tx {:?}",
-                self.rt
-                    .block_on(self.web3.eth().transaction(TransactionId::Hash(result)))
-            )
-        });
+        println!("Tx succeeded: {}/{}", succeed, total);
 
-        Ok(())
+        Ok(results)
     }
 }
 
 fn main() -> web3::Result<()> {
-    let client = TestCLient::setup(None, None);
+    let client = TestCLient::setup(None, None, None);
 
     println!("chain_id {}", client.chain_id().unwrap());
     println!("gas_price {}", client.gas_price().unwrap());
@@ -142,12 +205,13 @@ fn main() -> web3::Result<()> {
 
     let keys = (0..20).map(|_| one_eth_key()).collect::<Vec<_>>();
     let accounts = keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
-    let amounts = vec![U256::exp10(17).as_u64(); 20];
-    client.distribution(&accounts, &amounts)?;
+    // 1000 eth
+    let amounts = vec![U256::exp10(18 + 3); 20];
+    let metrics = client.distribution(&accounts, &amounts)?;
 
-    for account in accounts {
-        let balance = client.balance(account.parse().unwrap(), None);
-        println!("Balance of {:?}: {}", account, balance);
+    for m in metrics {
+        let balance = client.balance(m.to, None);
+        println!("Balance of {:?}: {}", m.to, balance);
     }
 
     Ok(())
