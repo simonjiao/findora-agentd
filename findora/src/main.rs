@@ -133,6 +133,7 @@ impl TestClient {
         source: Option<(secp256k1::SecretKey, Address)>,
         accounts: &[&str],
         amounts: &[U256],
+        block_time: Option<u64>,
     ) -> web3::Result<(Vec<TransferMetrics>, u64)> {
         let mut results = vec![];
         let mut succeed = 0u64;
@@ -140,7 +141,7 @@ impl TestClient {
         let total = accounts.len();
         let source_address = source.unwrap_or((self.root_sk, self.root_addr)).1;
         let source_sk = source.unwrap_or((self.root_sk, self.root_addr)).0;
-        let wait_time = BLOCK_TIME * 3 + 1;
+        let wait_time = block_time.unwrap_or(BLOCK_TIME) * 3 + 1;
         accounts
             .iter()
             .zip(amounts)
@@ -215,6 +216,7 @@ fn main() -> web3::Result<()> {
     let mut prog = "feth".to_owned();
     let mut source_keys = None;
     let mut metrics = None;
+    let mut block_time = None;
     for (i, arg) in env::args().enumerate() {
         if i == 0 {
             prog = arg;
@@ -233,6 +235,8 @@ fn main() -> web3::Result<()> {
             }
         } else if i == 2 {
             per_count = arg.parse::<usize>().unwrap_or(per_count);
+        } else if i == 3 {
+            block_time = Some(arg.parse::<u64>().unwrap_or(BLOCK_TIME));
         }
     }
     let source_amount = U256::exp10(18 + 3); // 1000 eth
@@ -261,7 +265,12 @@ fn main() -> web3::Result<()> {
         let source_accounts = source_keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
         // 1000 eth
         let amounts = vec![source_amount; source_count];
-        metrics = Some(client.distribution(None, &source_accounts, &amounts).unwrap().0);
+        metrics = Some(
+            client
+                .distribution(None, &source_accounts, &amounts, block_time)
+                .unwrap()
+                .0,
+        );
         // save metrics to file
         let data = serde_json::to_string(&metrics).unwrap();
         std::fs::write("metrics.001", &data).unwrap();
@@ -312,7 +321,7 @@ fn main() -> web3::Result<()> {
             let handle = thread::spawn(move || {
                 let amounts = vec![am; target_count];
                 let accounts = keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
-                let (metrics, succeed) = client.distribution(source, &accounts, &amounts).unwrap();
+                let (metrics, succeed) = client.distribution(source, &accounts, &amounts, block_time).unwrap();
                 let file = format!("metrics.target.{}", i);
                 let data = serde_json::to_string(&metrics).unwrap();
                 std::fs::write(file, data).unwrap();
