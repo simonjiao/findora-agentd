@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
+use std::{env, thread};
 use tokio::runtime::Runtime;
 use web3::{
     transports::Http,
@@ -202,34 +202,78 @@ impl TestClient {
     }
 }
 
+fn show_usage(prog: &str) {
+    println!("{} help", prog);
+    println!("{} load_source NumberPerAccount", prog);
+    println!("{} SourceAccountNumber NumberPerAccount", prog);
+}
+
 fn main() -> web3::Result<()> {
-    let per_count = 10;
-    let source_count = 5;
+    let mut per_count = 10;
+    let mut source_count = 5;
+    let mut prog = "feth".to_owned();
+    let mut source_keys = None;
+    let mut metrics = None;
+    for (i, arg) in env::args().enumerate() {
+        if i == 0 {
+            prog = arg;
+        } else if i == 1 {
+            if arg.as_str() == "help" {
+                show_usage(prog.as_str());
+                return Ok(());
+            } else if arg.as_str() == "load_source" {
+                println!("loading from \"source_keys.001\"");
+                let keys: Vec<KeyPair> =
+                    serde_json::from_str(std::fs::read_to_string("source_keys.001").unwrap().as_str()).unwrap();
+                source_count = keys.len();
+                source_keys = Some(keys);
+            } else {
+                source_count = arg.parse::<usize>().unwrap_or(source_count);
+            }
+        } else if i == 2 {
+            per_count = arg.parse::<usize>().unwrap_or(per_count);
+        }
+    }
     let source_amount = U256::exp10(18 + 3); // 1000 eth
     let target_amount = U256::exp10(17); // 0.1 eth
 
     let client = TestClient::setup(None, None, None);
 
-    println!("chain_id {}", client.chain_id().unwrap());
-    println!("gas_price {}", client.gas_price().unwrap());
-    println!("block_number {}", client.block_number().unwrap());
-    println!("frc20 code {:?}", client.frc20_code().unwrap());
-    println!("Calling balance.");
+    println!("chain_id:     {}", client.chain_id().unwrap());
+    println!("gas_price:    {}", client.gas_price().unwrap());
+    println!("block_number: {}", client.block_number().unwrap());
+    println!("frc20 code:   {:?}", client.frc20_code().unwrap());
     let balance = client.balance(ROOT_ADDR[2..].parse().unwrap(), None);
-    println!("Balance of ROOT: {}", balance);
+    println!("Root Balance: {}", balance);
 
-    let source_keys = (0..source_count).map(|_| one_eth_key()).collect::<Vec<_>>();
-    let data = serde_json::to_string(&source_keys).unwrap();
-    client.rt.block_on(tokio::fs::write("source_keys.001", &data)).unwrap();
+    let source_keys = source_keys.unwrap_or_else(|| {
+        let source_keys = (0..source_count).map(|_| one_eth_key()).collect::<Vec<_>>();
+        let data = serde_json::to_string(&source_keys).unwrap();
+        std::fs::write("source_keys.001", &data).unwrap();
 
-    let source_accounts = source_keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
-    // 1000 eth
-    let amounts = vec![source_amount; source_count];
-    let metrics = client.distribution(None, &source_accounts, &amounts)?;
+        let source_accounts = source_keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
+        // 1000 eth
+        let amounts = vec![source_amount; source_count];
+        metrics = Some(client.distribution(None, &source_accounts, &amounts).unwrap());
+        // save metrics to file
+        let data = serde_json::to_string(&metrics).unwrap();
+        std::fs::write("metrics.001", &data).unwrap();
 
-    // save metrics to file
-    let data = serde_json::to_string(&metrics).unwrap();
-    client.rt.block_on(tokio::fs::write("metrics.001", &data)).unwrap();
+        source_keys
+    });
+    let metrics = metrics.unwrap_or_else(|| {
+        source_keys
+            .iter()
+            .map(|_| TransferMetrics {
+                from: client.root_addr,
+                to: Default::default(),
+                amount: Default::default(),
+                hash: None,
+                status: 1,
+                wait: 0,
+            })
+            .collect::<Vec<_>>()
+    });
 
     let client = Arc::new(client);
     let mut handles = vec![];
@@ -264,6 +308,10 @@ fn main() -> web3::Result<()> {
             handles.push(handle);
         }
     });
+
+    for h in handles {
+        h.join().unwrap();
+    }
 
     Ok(())
 }
