@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::ops::Mul;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{env, thread};
 use tokio::runtime::Runtime;
@@ -133,7 +133,7 @@ impl TestClient {
         source: Option<(secp256k1::SecretKey, Address)>,
         accounts: &[&str],
         amounts: &[U256],
-    ) -> web3::Result<Vec<TransferMetrics>> {
+    ) -> web3::Result<(Vec<TransferMetrics>, u64)> {
         let mut results = vec![];
         let mut succeed = 0u64;
         let mut idx = 1u64;
@@ -199,7 +199,7 @@ impl TestClient {
 
         println!("Tx succeeded: {}/{}", succeed, total);
 
-        Ok(results)
+        Ok((results, succeed))
     }
 }
 
@@ -261,7 +261,7 @@ fn main() -> web3::Result<()> {
         let source_accounts = source_keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
         // 1000 eth
         let amounts = vec![source_amount; source_count];
-        metrics = Some(client.distribution(None, &source_accounts, &amounts).unwrap());
+        metrics = Some(client.distribution(None, &source_accounts, &amounts).unwrap().0);
         // save metrics to file
         let data = serde_json::to_string(&metrics).unwrap();
         std::fs::write("metrics.001", &data).unwrap();
@@ -292,8 +292,9 @@ fn main() -> web3::Result<()> {
 
     let client = Arc::new(client);
     let mut handles = vec![];
-
+    let total_succeed = Arc::new(Mutex::new(0u64));
     let now = std::time::Instant::now();
+
     metrics.into_iter().enumerate().for_each(|(i, m)| {
         if m.status == 1 {
             let client = client.clone();
@@ -306,14 +307,18 @@ fn main() -> web3::Result<()> {
                     Address::from_str(s.address.as_str()).unwrap(),
                 )
             });
+            let total_succeed = total_succeed.clone();
 
             let handle = thread::spawn(move || {
                 let amounts = vec![am; target_count];
                 let accounts = keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
-                let metrics = client.distribution(source, &accounts, &amounts).unwrap();
+                let (metrics, succeed) = client.distribution(source, &accounts, &amounts).unwrap();
                 let file = format!("metrics.target.{}", i);
                 let data = serde_json::to_string(&metrics).unwrap();
                 std::fs::write(file, data).unwrap();
+
+                let mut num = total_succeed.lock().unwrap();
+                *num += succeed;
             });
             handles.push(handle);
         }
@@ -327,8 +332,12 @@ fn main() -> web3::Result<()> {
     let elapsed = now.elapsed().as_secs();
     let avg = source_count as f64 * per_count as f64 / elapsed as f64;
     println!(
-        "Transfer from {} accounts to {} accounts concurrently, {:.3} Transfer/s, total {} seconds",
-        source_count, per_count, avg, elapsed,
+        "Transfer from {} accounts to {} accounts concurrently, succeed {}, {:.3} Transfer/s, total {} seconds",
+        source_count,
+        per_count,
+        total_succeed.lock().unwrap(),
+        avg,
+        elapsed,
     );
 
     Ok(())
