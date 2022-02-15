@@ -247,6 +247,9 @@ fn main() -> web3::Result<()> {
     println!("Root Balance: {}", balance);
 
     let source_keys = source_keys.unwrap_or_else(|| {
+        if std::fs::File::open("source_keys.001").is_ok() {
+            panic!("file \"source_keys.001\" already exists");
+        }
         let source_keys = (0..source_count).map(|_| one_eth_key()).collect::<Vec<_>>();
         let data = serde_json::to_string(&source_keys).unwrap();
         std::fs::write("source_keys.001", &data).unwrap();
@@ -275,9 +278,14 @@ fn main() -> web3::Result<()> {
             .collect::<Vec<_>>()
     });
 
+    if source_count == 0 || per_count == 0 {
+        return Ok(());
+    }
+
     let client = Arc::new(client);
     let mut handles = vec![];
 
+    let now = std::time::Instant::now();
     metrics.into_iter().enumerate().for_each(|(i, m)| {
         if m.status == 1 {
             let client = client.clone();
@@ -312,6 +320,13 @@ fn main() -> web3::Result<()> {
     for h in handles {
         h.join().unwrap();
     }
+
+    let elapsed = now.elapsed().as_secs();
+    let avg = source_count as f64 * per_count as f64 / elapsed as f64;
+    println!(
+        "Transfer from {} accounts to {} accounts concurrently, {:.3} Transfer/s, total {} seconds",
+        source_count, per_count, avg, elapsed,
+    );
 
     Ok(())
 }
