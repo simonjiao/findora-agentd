@@ -3,6 +3,7 @@ use bip32::{DerivationPath, XPrv};
 use libsecp256k1::{PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
+use std::ops::Mul;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,8 +21,8 @@ const FRC20_ADDRESS: u64 = 0x1000;
 const BLOCK_TIME: u64 = 16;
 
 //const WEB3_SRV: &str = "http://127.0.0.1:8545";
-const WEB3_SRV: &str = "http://18.236.205.22:8545";
-//const WEB3_SRV: &str = "https://prod-testnet.prod.findora.org:8545";
+//const WEB3_SRV: &str = "http://18.236.205.22:8545";
+const WEB3_SRV: &str = "https://prod-testnet.prod.findora.org:8545";
 //const WEB3_SRV: &str = "https://dev-mainnetmock.dev.findora.org:8545";
 
 const ROOT_SK: &str = "b8836c243a1ff93a63b12384176f102345123050c9f3d3febbb82e3acd6dd1cb";
@@ -250,6 +251,9 @@ fn main() -> web3::Result<()> {
         if std::fs::File::open("source_keys.001").is_ok() {
             panic!("file \"source_keys.001\" already exists");
         }
+        if source_amount.mul(source_count + 1) >= balance {
+            panic!("Too large source account number, maximum {}", balance / source_amount);
+        }
         let source_keys = (0..source_count).map(|_| one_eth_key()).collect::<Vec<_>>();
         let data = serde_json::to_string(&source_keys).unwrap();
         std::fs::write("source_keys.001", &data).unwrap();
@@ -267,13 +271,17 @@ fn main() -> web3::Result<()> {
     let metrics = metrics.unwrap_or_else(|| {
         source_keys
             .iter()
-            .map(|_| TransferMetrics {
-                from: client.root_addr,
-                to: Default::default(),
-                amount: Default::default(),
-                hash: None,
-                status: 1,
-                wait: 0,
+            .map(|kp| {
+                let balance = client.balance(kp.address[2..].parse().unwrap(), None);
+                let status = if balance <= target_amount.mul(per_count) { 0 } else { 1 };
+                TransferMetrics {
+                    from: client.root_addr,
+                    to: Default::default(),
+                    amount: balance,
+                    hash: None,
+                    status,
+                    wait: 0,
+                }
             })
             .collect::<Vec<_>>()
     });
@@ -289,7 +297,7 @@ fn main() -> web3::Result<()> {
     metrics.into_iter().enumerate().for_each(|(i, m)| {
         if m.status == 1 {
             let client = client.clone();
-            let target_count = source_count * per_count;
+            let target_count = per_count;
             let keys = (0..target_count).map(|_| one_eth_key()).collect::<Vec<_>>();
             let am = target_amount;
             let source = source_keys.get(i).map(|s| {
@@ -302,21 +310,16 @@ fn main() -> web3::Result<()> {
             let handle = thread::spawn(move || {
                 let amounts = vec![am; target_count];
                 let accounts = keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
-                let metrics = client
-                    .distribution(
-                        source,
-                        &accounts[i * per_count..(i + 1) * per_count],
-                        &amounts[i * per_count..(i + 1) * per_count],
-                    )
-                    .unwrap();
+                let metrics = client.distribution(source, &accounts, &amounts).unwrap();
                 let file = format!("metrics.target.{}", i);
                 let data = serde_json::to_string(&metrics).unwrap();
-                client.rt.block_on(tokio::fs::write(file, data)).unwrap();
+                std::fs::write(file, data).unwrap();
             });
             handles.push(handle);
         }
     });
 
+    source_count = handles.len();
     for h in handles {
         h.join().unwrap();
     }
