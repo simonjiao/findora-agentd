@@ -280,22 +280,25 @@ fn main() -> web3::Result<()> {
     let metrics = metrics.unwrap_or_else(|| {
         source_keys
             .iter()
-            .map(|kp| {
+            .filter_map(|kp| {
                 let balance = client.balance(kp.address[2..].parse().unwrap(), None);
-                let status = if balance <= target_amount.mul(per_count) { 0 } else { 1 };
-                TransferMetrics {
-                    from: client.root_addr,
-                    to: Default::default(),
-                    amount: balance,
-                    hash: None,
-                    status,
-                    wait: 0,
+                if balance <= target_amount.mul(per_count) {
+                    None
+                } else {
+                    Some(TransferMetrics {
+                        from: client.root_addr,
+                        to: Default::default(),
+                        amount: balance,
+                        hash: None,
+                        status: 1,
+                        wait: 0,
+                    })
                 }
             })
             .collect::<Vec<_>>()
     });
 
-    if source_count == 0 || per_count == 0 {
+    if source_count == 0 || per_count == 0 || metrics.is_empty() {
         return Ok(());
     }
 
