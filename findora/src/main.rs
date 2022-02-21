@@ -4,10 +4,10 @@ use std::str::FromStr;
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
-    thread,
 };
 
-use feth::{one_eth_key, KeyPair, TestClient, TransferMetrics, BLOCK_TIME, ROOT_ADDR};
+use feth::{one_eth_key, utils::*, KeyPair, TestClient, TransferMetrics, BLOCK_TIME, ROOT_ADDR};
+use rayon::prelude::*;
 use web3::types::Address;
 
 #[derive(Parser, Debug)]
@@ -18,11 +18,11 @@ struct Cli {
     min_parallelism: u64,
 
     /// The maximum parallelism
-    #[clap(long, default_value_t = 2000)]
+    #[clap(long, default_value_t = 200)]
     max_parallelism: u64,
 
     /// The count of transactions sent by a routine
-    #[clap(long, default_value_t = 20)]
+    #[clap(long, default_value_t = 0)]
     count: u64,
 
     /// load source accounts from file, or generate new accounts
@@ -65,7 +65,7 @@ fn main() -> web3::Result<()> {
 
     let per_count = cli.count;
     let min_par = cli.min_parallelism;
-    let _max_par = cli.max_parallelism;
+    let max_par = cli.max_parallelism;
     let source_file = cli.source;
     let _prog = "feth".to_owned();
     let mut source_keys = None;
@@ -83,6 +83,16 @@ fn main() -> web3::Result<()> {
     let source_amount = web3::types::U256::exp10(18 + 3); // 1000 eth
     let target_amount = web3::types::U256::exp10(17); // 0.1 eth
 
+    println!("logical cpus {}, physical cpus {}", log_cpus(), phy_cpus());
+
+    if max_par > log_cpus() * 100 {
+        panic!(
+            "Two much working thread, maybe overload the system {}/{}",
+            max_par,
+            log_cpus(),
+        )
+    }
+
     let client = TestClient::setup(cli.network, None, None);
 
     println!("chain_id:     {}", client.chain_id().unwrap());
@@ -92,6 +102,13 @@ fn main() -> web3::Result<()> {
     let balance = client.balance(ROOT_ADDR[2..].parse().unwrap(), None);
     println!("Root Balance: {}", balance);
 
+    let max_pool_size = source_keys.as_ref().map(|s| s.len()).unwrap_or(min_par as usize);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(max_pool_size)
+        .build_global()
+        .unwrap();
+    println!("thread pool size {}", max_pool_size);
+
     let source_keys = source_keys.unwrap_or_else(|| {
         // generate new keys
         if std::fs::File::open("source_keys.001").is_ok() {
@@ -100,16 +117,19 @@ fn main() -> web3::Result<()> {
         if source_amount.mul(min_par + 1) >= balance {
             panic!("Too large source account number, maximum {}", balance / source_amount);
         }
-        let source_keys = (0..min_par).map(|_| one_eth_key()).collect::<Vec<_>>();
+        let source_keys = (0..min_par).into_par_iter().map(|_| one_eth_key()).collect::<Vec<_>>();
         let data = serde_json::to_string(&source_keys).unwrap();
         std::fs::write("source_keys.001", &data).unwrap();
 
-        let source_accounts = source_keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
+        let source_accounts = source_keys
+            .par_iter()
+            .map(|key| key.address.as_str())
+            .collect::<Vec<_>>();
         // 1000 eth
         let amounts = vec![source_amount; min_par as usize];
         metrics = Some(
             client
-                .distribution(None, &source_accounts, &amounts, block_time)
+                .distribution(None, &source_accounts, &amounts, &block_time)
                 .unwrap()
                 .0,
         );
@@ -121,7 +141,7 @@ fn main() -> web3::Result<()> {
     });
     let metrics = metrics.unwrap_or_else(|| {
         source_keys
-            .iter()
+            .par_iter()
             .filter_map(|kp| {
                 let balance = client.balance(kp.address[2..].parse().unwrap(), None);
                 if balance <= target_amount.mul(per_count) {
@@ -141,54 +161,55 @@ fn main() -> web3::Result<()> {
     });
 
     if min_par == 0 || per_count == 0 || metrics.is_empty() {
+        println!("Not enough sufficient source accounts or target accounts, skipped.");
         return Ok(());
     }
 
     let client = Arc::new(client);
-    let mut handles = vec![];
     let total_succeed = Arc::new(Mutex::new(0u64));
     let now = std::time::Instant::now();
 
-    metrics.into_iter().enumerate().for_each(|(i, m)| {
-        if m.status == 1 {
-            let client = client.clone();
-            let target_count = per_count;
-            let keys = (0..target_count).map(|_| one_eth_key()).collect::<Vec<_>>();
-            let am = target_amount;
-            let source = source_keys.get(i).map(|s| {
-                (
-                    secp256k1::SecretKey::from_str(s.private.as_str()).unwrap(),
-                    Address::from_str(s.address.as_str()).unwrap(),
-                )
-            });
-            let total_succeed = total_succeed.clone();
+    let handles = metrics
+        .into_par_iter()
+        .enumerate()
+        .filter_map(|(i, m)| {
+            if m.status == 1 {
+                let client = client.clone();
+                let target_count = per_count;
+                let keys = (0..target_count).map(|_| one_eth_key()).collect::<Vec<_>>();
+                let am = target_amount;
+                let source = source_keys.get(i).map(|s| {
+                    (
+                        secp256k1::SecretKey::from_str(s.private.as_str()).unwrap(),
+                        Address::from_str(s.address.as_str()).unwrap(),
+                    )
+                });
+                let total_succeed = total_succeed.clone();
 
-            let handle = thread::spawn(move || {
                 let amounts = vec![am; target_count as usize];
                 let accounts = keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
-                let (metrics, succeed) = client.distribution(source, &accounts, &amounts, block_time).unwrap();
+                let (metrics, succeed) = client.distribution(source, &accounts, &amounts, &block_time).unwrap();
                 let file = format!("metrics.target.{}", i);
                 let data = serde_json::to_string(&metrics).unwrap();
                 std::fs::write(file, data).unwrap();
 
                 let mut num = total_succeed.lock().unwrap();
                 *num += succeed;
-            });
-            handles.push(handle);
-        }
-    });
+                Some(succeed)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
 
-    let source_count = handles.len();
-    for h in handles {
-        h.join().unwrap();
-    }
+    let source_count = handles.iter().sum::<u64>();
 
     let elapsed = now.elapsed().as_secs();
-    let avg = source_count as f64 * per_count as f64 / elapsed as f64;
+    let avg = source_count as f64 / elapsed as f64;
     println!(
-        "Transfer from {} accounts to {} accounts concurrently, succeed {}, {:.3} Transfer/s, total {} seconds",
+        "Performed {} transfers, concurrences {}, succeed {}, {:.3} Transfer/s, total {} seconds",
         source_count,
-        per_count,
+        handles.len(),
         total_succeed.lock().unwrap(),
         avg,
         elapsed,

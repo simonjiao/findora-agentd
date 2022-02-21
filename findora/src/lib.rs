@@ -1,3 +1,5 @@
+pub mod utils;
+
 use bip0039::{Count, Language, Mnemonic};
 use bip32::{DerivationPath, XPrv};
 use libsecp256k1::{PublicKey, SecretKey};
@@ -131,7 +133,7 @@ impl TestClient {
         source: Option<(secp256k1::SecretKey, Address)>,
         accounts: &[&str],
         amounts: &[U256],
-        block_time: Option<u64>,
+        block_time: &Option<u64>,
     ) -> web3::Result<(Vec<TransferMetrics>, u64)> {
         let mut results = vec![];
         let mut succeed = 0u64;
