@@ -37,6 +37,10 @@ struct Cli {
     #[clap(long, default_value_t = BLOCK_TIME)]
     block_time: u64,
 
+    /// findora network fullnode urls: http://path:8545,http://path1:8546
+    #[clap(long)]
+    network: Option<String>,
+
     #[clap(subcommand)]
     command: Option<Commands>,
 }
@@ -54,47 +58,32 @@ enum Commands {
     },
 }
 
-fn show_usage(prog: &str) {
-    println!("{} help", prog);
-    println!("{} load_source NumberPerAccount", prog);
-    println!("{} SourceAccountNumber NumberPerAccount", prog);
-}
-
 fn main() -> web3::Result<()> {
-    let _cli = Cli::parse();
+    let cli = Cli::parse();
 
-    let mut per_count = 10;
-    let mut source_count = 5;
-    let mut prog = "feth".to_owned();
+    println!("{:?}", cli);
+
+    let per_count = cli.count;
+    let min_par = cli.min_parallelism;
+    let _max_par = cli.max_parallelism;
+    let source_file = cli.source;
+    let _prog = "feth".to_owned();
     let mut source_keys = None;
     let mut metrics = None;
-    let mut block_time = None;
-    for (i, arg) in std::env::args().enumerate() {
-        if i == 0 {
-            prog = arg;
-        } else if i == 1 {
-            if arg.as_str() == "help" {
-                show_usage(prog.as_str());
-                return Ok(());
-            } else if arg.as_str() == "load_source" {
-                println!("loading from \"source_keys.001\"");
-                let keys: Vec<KeyPair> =
-                    serde_json::from_str(std::fs::read_to_string("source_keys.001").unwrap().as_str()).unwrap();
-                source_count = keys.len();
-                source_keys = Some(keys);
-            } else {
-                source_count = arg.parse::<usize>().unwrap_or(source_count);
-            }
-        } else if i == 2 {
-            per_count = arg.parse::<usize>().unwrap_or(per_count);
-        } else if i == 3 {
-            block_time = Some(arg.parse::<u64>().unwrap_or(BLOCK_TIME));
+    let block_time = Some(cli.block_time);
+    if cli.load {
+        let keys: Vec<KeyPair> = serde_json::from_str(std::fs::read_to_string(source_file).unwrap().as_str()).unwrap();
+        source_keys = Some(keys);
+    } else {
+        println!("generating new source keys");
+        if std::fs::File::open("source_keys.001").is_ok() {
+            panic!("file \"source_keys.001\" already exists");
         }
     }
     let source_amount = web3::types::U256::exp10(18 + 3); // 1000 eth
     let target_amount = web3::types::U256::exp10(17); // 0.1 eth
 
-    let client = TestClient::setup(None, None, None);
+    let client = TestClient::setup(cli.network, None, None);
 
     println!("chain_id:     {}", client.chain_id().unwrap());
     println!("gas_price:    {}", client.gas_price().unwrap());
@@ -104,19 +93,20 @@ fn main() -> web3::Result<()> {
     println!("Root Balance: {}", balance);
 
     let source_keys = source_keys.unwrap_or_else(|| {
+        // generate new keys
         if std::fs::File::open("source_keys.001").is_ok() {
             panic!("file \"source_keys.001\" already exists");
         }
-        if source_amount.mul(source_count + 1) >= balance {
+        if source_amount.mul(min_par + 1) >= balance {
             panic!("Too large source account number, maximum {}", balance / source_amount);
         }
-        let source_keys = (0..source_count).map(|_| one_eth_key()).collect::<Vec<_>>();
+        let source_keys = (0..min_par).map(|_| one_eth_key()).collect::<Vec<_>>();
         let data = serde_json::to_string(&source_keys).unwrap();
         std::fs::write("source_keys.001", &data).unwrap();
 
         let source_accounts = source_keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
         // 1000 eth
-        let amounts = vec![source_amount; source_count];
+        let amounts = vec![source_amount; min_par as usize];
         metrics = Some(
             client
                 .distribution(None, &source_accounts, &amounts, block_time)
@@ -150,7 +140,7 @@ fn main() -> web3::Result<()> {
             .collect::<Vec<_>>()
     });
 
-    if source_count == 0 || per_count == 0 || metrics.is_empty() {
+    if min_par == 0 || per_count == 0 || metrics.is_empty() {
         return Ok(());
     }
 
@@ -174,7 +164,7 @@ fn main() -> web3::Result<()> {
             let total_succeed = total_succeed.clone();
 
             let handle = thread::spawn(move || {
-                let amounts = vec![am; target_count];
+                let amounts = vec![am; target_count as usize];
                 let accounts = keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
                 let (metrics, succeed) = client.distribution(source, &accounts, &amounts, block_time).unwrap();
                 let file = format!("metrics.target.{}", i);
@@ -188,7 +178,7 @@ fn main() -> web3::Result<()> {
         }
     });
 
-    source_count = handles.len();
+    let source_count = handles.len();
     for h in handles {
         h.join().unwrap();
     }

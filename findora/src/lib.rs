@@ -68,8 +68,8 @@ pub struct TestClient {
 }
 
 impl TestClient {
-    pub fn setup(url: Option<&str>, root_sk: Option<&str>, root_addr: Option<&str>) -> Self {
-        let transport = web3::transports::Http::new(url.unwrap_or(WEB3_SRV)).unwrap();
+    pub fn setup(url: Option<String>, root_sk: Option<&str>, root_addr: Option<&str>) -> Self {
+        let transport = web3::transports::Http::new(url.unwrap_or_else(|| WEB3_SRV.to_string()).as_str()).unwrap();
         let web3 = Arc::new(web3::Web3::new(transport));
         let root_sk = secp256k1::SecretKey::from_str(root_sk.unwrap_or(ROOT_SK)).unwrap();
         let root_addr = Address::from_str(root_addr.unwrap_or(ROOT_ADDR)).unwrap();
