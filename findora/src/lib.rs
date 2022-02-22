@@ -62,6 +62,7 @@ pub struct TransferMetrics {
     pub wait: u64,          // seconds for waiting tx receipt
 }
 
+#[derive(Debug)]
 pub struct TestClient {
     pub web3: Arc<web3::Web3<Http>>,
     pub root_sk: secp256k1::SecretKey,

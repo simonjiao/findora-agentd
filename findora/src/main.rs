@@ -54,11 +54,16 @@ enum Commands {
         block_time: u64,
 
         /// the number of Eth Account to be fund
-        #[clap(long)]
+        #[clap(long, default_value_t = 0)]
         count: u64,
-        /// how much 0.1 eth to fund
+
+        /// how much 0.1-eth to fund
         #[clap(long, default_value_t = 1)]
         amount: u64,
+
+        /// load keys from file
+        #[clap(long)]
+        load: bool,
     },
 }
 
@@ -87,25 +92,35 @@ fn calc_pool_size(keys: usize, max_par: usize, min_par: usize) -> usize {
     max_pool_size
 }
 
-fn fund_accounts(network: String, block_time: u64, count: u64, am: u64) {
+fn fund_accounts(network: &str, block_time: u64, mut count: u64, am: u64, load: bool) {
     let mut amount = web3::types::U256::exp10(17); // 0.1 eth
     amount.mul_assign(am);
 
-    let client = TestClient::setup(Some(network), None, None);
+    let network = real_network(network);
+    // use first endpoint to fund accounts
+    let client = TestClient::setup(network[0].clone(), None, None);
     let balance = client.balance(ROOT_ADDR[2..].parse().unwrap(), None);
     println!("Root Balance: {}", balance);
 
-    // check if the key file exists
-    println!("generating new source keys");
-    if std::fs::File::open("source_keys.001").is_ok() {
-        panic!("file \"source_keys.001\" already exists");
-    }
-    if amount.mul(count + 1) >= balance {
-        panic!("Too large source account number, maximum {}", balance / amount);
-    }
-    let source_keys = (0..count).map(|_| one_eth_key()).collect::<Vec<_>>();
-    let data = serde_json::to_string(&source_keys).unwrap();
-    std::fs::write("source_keys.001", &data).unwrap();
+    let source_keys = if load {
+        let keys: Vec<_> = serde_json::from_str(std::fs::read_to_string("source_keys.001").unwrap().as_str()).unwrap();
+        count = keys.len() as u64;
+        keys
+    } else {
+        // check if the key file exists
+        println!("generating new source keys");
+        if std::fs::File::open("source_keys.001").is_ok() {
+            panic!("file \"source_keys.001\" already exists");
+        }
+        if amount.mul(count + 1) >= balance {
+            panic!("Too large source account number, maximum {}", balance / amount);
+        }
+        let source_keys = (0..count).map(|_| one_eth_key()).collect::<Vec<_>>();
+        let data = serde_json::to_string(&source_keys).unwrap();
+        std::fs::write("source_keys.001", &data).unwrap();
+
+        source_keys
+    };
 
     let source_accounts = source_keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
     // 1000 eth
@@ -130,8 +145,9 @@ fn main() -> web3::Result<()> {
             block_time,
             count,
             amount,
+            load,
         }) => {
-            fund_accounts(network.clone(), *block_time, *count, *amount);
+            fund_accounts(network.as_ref(), *block_time, *count, *amount, *load);
             return Ok(());
         }
         None => {}
@@ -157,7 +173,16 @@ fn main() -> web3::Result<()> {
         .unwrap();
     println!("thread pool size {}", max_pool_size);
 
-    let client = TestClient::setup(cli.network, None, None);
+    let networks = cli.network.map(|n| real_network(n.as_str()));
+    let clients = if let Some(endpoints) = networks {
+        endpoints
+            .into_iter()
+            .map(|n| Arc::new(TestClient::setup(n, None, None)))
+            .collect::<Vec<_>>()
+    } else {
+        vec![Arc::new(TestClient::setup(None, None, None))]
+    };
+    let client = clients[0].clone();
 
     println!("chain_id:     {}", client.chain_id().unwrap());
     println!("gas_price:    {}", client.gas_price().unwrap());
@@ -181,56 +206,67 @@ fn main() -> web3::Result<()> {
         return Ok(());
     }
 
-    let client = Arc::new(client);
     let total_succeed = Arc::new(Mutex::new(0u64));
-    let now = std::time::Instant::now();
-    let concurrences = if source_keys.len() > max_pool_size {
+    let _concurrences = if source_keys.len() > max_pool_size {
         max_pool_size
     } else {
         source_keys.len()
     };
+    let now = std::time::Instant::now();
 
-    let handles = source_keys
+    // split the source keys
+    let mut chunk_size = source_keys.len() / clients.len();
+    if source_keys.len() % clients.len() != 0 {
+        chunk_size += 1;
+    }
+
+    source_keys
+        .par_chunks(chunk_size)
+        .zip(clients)
         .into_par_iter()
         .enumerate()
-        .map(|(i, m)| {
-            let client = client.clone();
-            let target_count = per_count;
-            let keys = (0..target_count).map(|_| one_eth_key()).collect::<Vec<_>>();
-            let am = target_amount;
-            let source = (
-                secp256k1::SecretKey::from_str(m.private.as_str()).unwrap(),
-                Address::from_str(m.address.as_str()).unwrap(),
-            );
-            let total_succeed = total_succeed.clone();
+        .for_each(|(chunk, (key_pairs, client))| {
+            let handles = key_pairs
+                .into_par_iter()
+                .enumerate()
+                .map(|(i, &m)| {
+                    let client = client.clone();
+                    let target_count = per_count;
+                    let keys = (0..target_count).map(|_| one_eth_key()).collect::<Vec<_>>();
+                    let am = target_amount;
+                    let source = (
+                        secp256k1::SecretKey::from_str(m.private.as_str()).unwrap(),
+                        Address::from_str(m.address.as_str()).unwrap(),
+                    );
+                    let total_succeed = total_succeed.clone();
 
-            let amounts = vec![am; target_count as usize];
-            let accounts = keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
-            let (metrics, succeed) = client
-                .distribution(Some(source), &accounts, &amounts, &block_time)
-                .unwrap();
-            let file = format!("metrics.target.{}", i);
-            let data = serde_json::to_string(&metrics).unwrap();
-            std::fs::write(file, data).unwrap();
+                    let amounts = vec![am; target_count as usize];
+                    let accounts = keys.iter().map(|key| key.address.as_str()).collect::<Vec<_>>();
+                    let (metrics, succeed) = client
+                        .distribution(Some(source), &accounts, &amounts, &block_time)
+                        .unwrap();
+                    let file = format!("metrics.target.{}.{}", chunk, i);
+                    let data = serde_json::to_string(&metrics).unwrap();
+                    std::fs::write(file, data).unwrap();
 
-            let mut num = total_succeed.lock().unwrap();
-            *num += succeed;
-            succeed
-        })
-        .collect::<Vec<_>>();
+                    let mut num = total_succeed.lock().unwrap();
+                    *num += succeed;
+                    succeed
+                })
+                .collect::<Vec<_>>();
 
-    let source_count = handles.iter().sum::<u64>();
+            let _total = handles.iter().sum::<u64>();
+        });
 
-    let elapsed = now.elapsed().as_secs();
-    let avg = source_count as f64 / elapsed as f64;
-    println!(
-        "Performed {} transfers, max concurrences {}, succeed {}, {:.3} Transfer/s, total {} seconds",
-        source_count,
-        concurrences,
-        total_succeed.lock().unwrap(),
-        avg,
-        elapsed,
-    );
+    let _elapsed = now.elapsed().as_secs();
+    //println!(
+    //    "Performed {} transfers, max concurrences {}, succeed {}, {:.3} Transfer/s, total {} seconds",
+    //    total,
+    //    concurrences,
+    //    total_succeed.lock().unwrap(),
+    //    avg,
+    //    elapsed,
+    //);
 
     Ok(())
 }
