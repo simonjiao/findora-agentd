@@ -64,11 +64,15 @@ enum Commands {
         /// load keys from file
         #[clap(long)]
         load: bool,
+
+        /// re-fund account with insufficient balance
+        #[clap(long)]
+        refund: bool,
     },
 }
 
 fn check_parallel_args(max_par: u64, min_par: u64) {
-    if max_par > log_cpus() * 100 {
+    if max_par > log_cpus() * 1000 {
         panic!(
             "Two much working thread, maybe overload the system {}/{}",
             max_par,
@@ -92,7 +96,7 @@ fn calc_pool_size(keys: usize, max_par: usize, min_par: usize) -> usize {
     max_pool_size
 }
 
-fn fund_accounts(network: &str, block_time: u64, mut count: u64, am: u64, load: bool) {
+fn fund_accounts(network: &str, block_time: u64, mut count: u64, am: u64, load: bool, refund: bool) {
     let mut amount = web3::types::U256::exp10(17); // 0.1 eth
     amount.mul_assign(am);
 
@@ -135,6 +139,14 @@ fn fund_accounts(network: &str, block_time: u64, mut count: u64, am: u64, load: 
     let source_accounts = source_keys
         .into_iter()
         .map(|key| Address::from_str(key.address.as_str()).unwrap())
+        .filter(|&from| {
+            if refund {
+                let balance = client.balance(from, None);
+                balance < amount
+            } else {
+                true
+            }
+        })
         .collect::<Vec<_>>();
     // 1000 eth
     let amounts = vec![amount; count as usize];
@@ -158,8 +170,9 @@ fn main() -> web3::Result<()> {
             count,
             amount,
             load,
+            refund,
         }) => {
-            fund_accounts(network.as_ref(), *block_time, *count, *amount, *load);
+            fund_accounts(network.as_ref(), *block_time, *count, *amount, *load, *refund);
             return Ok(());
         }
         None => {}
