@@ -102,9 +102,8 @@ fn fund_accounts(network: &str, block_time: u64, mut count: u64, am: u64, load: 
     let balance = client.balance(client.root_addr, None);
     println!("Balance of {:?}: {}", client.root_addr, balance);
 
-    let source_keys = if load {
+    let mut source_keys = if load {
         let keys: Vec<_> = serde_json::from_str(std::fs::read_to_string("source_keys.001").unwrap().as_str()).unwrap();
-        count = keys.len() as u64;
         keys
     } else {
         // check if the key file exists
@@ -121,6 +120,17 @@ fn fund_accounts(network: &str, block_time: u64, mut count: u64, am: u64, load: 
 
         source_keys
     };
+
+    // increase source keys and save them to file
+    if count as usize > source_keys.len() {
+        source_keys.resize_with(count as usize, one_eth_key);
+
+        std::fs::rename("source_keys.001", ".source_keys.001.bak").unwrap();
+        let data = serde_json::to_string(&source_keys).unwrap();
+        std::fs::write("source_keys.001", &data).unwrap();
+    }
+    // update count to actual count
+    count = source_keys.len() as u64;
 
     let source_accounts = source_keys
         .into_iter()
@@ -236,10 +246,6 @@ fn main() -> web3::Result<()> {
 
     // one-thread per source key
     // fix one source key to one endpoint
-    // channel1 {endpoint, from, tx_hash}: tx_sender -> tx_producer
-    // channel2 {endpoint, from, target}: tx_producer -> tx_sender
-    // tx_producer: check previous tx hash, create tx, send to channel2
-    // tx_sender: send tx, send tx hash to channel1
 
     println!("starting tests...");
     let total = source_keys.len() * per_count as usize;
@@ -257,10 +263,6 @@ fn main() -> web3::Result<()> {
                     let metrics = client
                         .distribution(Some(*source), accounts, amounts, &block_time)
                         .unwrap();
-                    //let file = format!("metrics.target.{}.{}", chunk, i);
-                    //let data = serde_json::to_string(&metrics).unwrap();
-                    //std::fs::write(&file, data).unwrap();
-
                     let mut num = total_succeed.lock().unwrap();
                     *num += metrics.succeed;
                     (chunk, i, metrics)
