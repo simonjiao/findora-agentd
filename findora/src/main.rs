@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use feth::{one_eth_key, utils::*, KeyPair, TestClient, BLOCK_TIME, ROOT_ADDR};
+use feth::{one_eth_key, utils::*, KeyPair, TestClient, BLOCK_TIME};
 use rayon::prelude::*;
 use web3::types::Address;
 
@@ -98,9 +98,9 @@ fn fund_accounts(network: &str, block_time: u64, mut count: u64, am: u64, load: 
 
     let network = real_network(network);
     // use first endpoint to fund accounts
-    let client = TestClient::setup(network[0].clone(), None, None);
-    let balance = client.balance(ROOT_ADDR[2..].parse().unwrap(), None);
-    println!("Root Balance: {}", balance);
+    let client = TestClient::setup(network[0].clone());
+    let balance = client.balance(client.root_addr, None);
+    println!("Balance of {:?}: {}", client.root_addr, balance);
 
     let source_keys = if load {
         let keys: Vec<_> = serde_json::from_str(std::fs::read_to_string("source_keys.001").unwrap().as_str()).unwrap();
@@ -179,10 +179,10 @@ fn main() -> web3::Result<()> {
     let clients = if let Some(endpoints) = networks {
         endpoints
             .into_iter()
-            .map(|n| Arc::new(TestClient::setup(n, None, None)))
+            .map(|n| Arc::new(TestClient::setup(n)))
             .collect::<Vec<_>>()
     } else {
-        vec![Arc::new(TestClient::setup(None, None, None))]
+        vec![Arc::new(TestClient::setup(None))]
     };
     let client = clients[0].clone();
 
