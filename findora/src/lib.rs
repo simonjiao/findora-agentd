@@ -9,8 +9,6 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::runtime::Runtime;
-use web3::api::Net;
-use web3::futures::TryFutureExt;
 use web3::{
     transports::Http,
     types::{

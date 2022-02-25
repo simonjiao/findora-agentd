@@ -14,6 +14,8 @@ pub fn real_network(network: &str) -> Vec<Option<String>> {
         "anvil" => vec![Some("https://prod-testnet.prod.findora.org:8545".to_string())],
         "mock" => vec![Some("https://dev-mainnetmock.dev.findora.org:8545".to_string())],
         "test" => vec![Some("http://18.236.205.22:8545".to_string())],
+        "qa01" => vec![Some("https://dev-qa01.dev.findora.org:8545".to_string())],
+        "qa02" => vec![Some("https://dev-qa02.dev.findora.org:8545".to_string())],
         n => {
             // comma seperated network endpoints
             n.split(',')
