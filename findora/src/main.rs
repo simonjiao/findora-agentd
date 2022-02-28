@@ -69,6 +69,16 @@ enum Commands {
         #[clap(long)]
         refund: bool,
     },
+    /// check ethereum account information
+    Info {
+        /// ethereum-compatible network
+        #[clap(long)]
+        network: String,
+
+        /// ethereum address
+        #[clap(long)]
+        account: Address,
+    },
 }
 
 fn check_parallel_args(max_par: u64, min_par: u64) {
@@ -94,6 +104,15 @@ fn calc_pool_size(keys: usize, max_par: usize, min_par: usize) -> usize {
     }
 
     max_pool_size
+}
+
+fn eth_account(network: &str, account: Address) {
+    let network = real_network(network);
+    // use first endpoint to fund accounts
+    let client = TestClient::setup(network[0].clone());
+    let balance = client.balance(account, None);
+    let nonce = client.nonce(account);
+    println!("{:?}: {} {:?}", account, balance, nonce);
 }
 
 fn fund_accounts(network: &str, block_time: u64, mut count: u64, am: u64, load: bool, refund: bool) {
@@ -125,7 +144,7 @@ fn fund_accounts(network: &str, block_time: u64, mut count: u64, am: u64, load: 
         source_keys
     };
 
-    // increase source keys and save them to file
+    // add more source keys and save them to file
     if count as usize > source_keys.len() {
         source_keys.resize_with(count as usize, one_eth_key);
 
@@ -175,10 +194,14 @@ fn main() -> web3::Result<()> {
             fund_accounts(network.as_ref(), *block_time, *count, *amount, *load, *refund);
             return Ok(());
         }
+        Some(Commands::Info { network, account }) => {
+            eth_account(network.as_ref(), *account);
+            return Ok(());
+        }
         None => {}
     }
 
-    let per_count = cli.count;
+    let count = cli.count;
     let min_par = cli.min_parallelism;
     let max_par = cli.max_parallelism;
     let source_file = cli.source;
@@ -219,7 +242,7 @@ fn main() -> web3::Result<()> {
         .par_iter()
         .filter_map(|kp| {
             let balance = client.balance(kp.address[2..].parse().unwrap(), None);
-            if balance <= target_amount.mul(per_count) {
+            if balance <= target_amount.mul(count) {
                 None
             } else {
                 Some(kp)
@@ -231,15 +254,15 @@ fn main() -> web3::Result<()> {
                     secp256k1::SecretKey::from_str(m.private.as_str()).unwrap(),
                     Address::from_str(m.address.as_str()).unwrap(),
                 ),
-                (0..per_count)
+                (0..count)
                     .map(|_| Address::from_str(one_eth_key().address.as_str()).unwrap())
                     .collect::<Vec<_>>(),
-                vec![target_amount; per_count as usize],
+                vec![target_amount; count as usize],
             )
         })
         .collect::<Vec<_>>();
 
-    if min_par == 0 || per_count == 0 || source_keys.is_empty() {
+    if min_par == 0 || count == 0 || source_keys.is_empty() {
         println!("Not enough sufficient source accounts or target accounts, skipped.");
         return Ok(());
     }
@@ -261,7 +284,7 @@ fn main() -> web3::Result<()> {
     // fix one source key to one endpoint
 
     println!("starting tests...");
-    let total = source_keys.len() * per_count as usize;
+    let total = source_keys.len() * count as usize;
     let now = std::time::Instant::now();
     let metrics = source_keys
         .par_chunks(chunk_size)

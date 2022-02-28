@@ -51,16 +51,16 @@ pub fn one_eth_key() -> KeyPair {
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct TxMetric {
     pub to: Address,
     pub amount: U256,
     pub hash: Option<H256>, // Tx hash
-    pub status: u64,        // 1 - success, 0 - fail
+    pub status: u64,        // 1 - success, other - fail
     pub wait: u64,          // seconds for waiting tx receipt
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct TransferMetrics {
     pub from: Address,
     pub total: u64,
@@ -160,6 +160,8 @@ impl TestClient {
         let source_address = source.unwrap_or((self.root_sk, self.root_addr)).1;
         let source_sk = source.unwrap_or((self.root_sk, self.root_addr)).0;
         let wait_time = block_time.unwrap_or(BLOCK_TIME) * 3 + 1;
+        let chain_id = self.chain_id().map(|id| id.as_u64());
+        let gas_price = self.gas_price();
         accounts
             .iter()
             .zip(amounts)
@@ -168,11 +170,16 @@ impl TestClient {
                 let tm = TxMetric {
                     to: to.unwrap(),
                     amount: am,
+                    status: 99,
                     ..Default::default()
                 };
+                let nonce = self.nonce(source_address);
                 let tp = TransactionParameters {
                     to,
                     value: am,
+                    chain_id,
+                    gas_price,
+                    nonce,
                     ..Default::default()
                 };
                 (tp, tm)
@@ -183,32 +190,40 @@ impl TestClient {
                     .rt
                     .block_on(self.web3.accounts().sign_transaction(tx_object, &source_sk))
                 {
-                    if let Ok(hash) = self
+                    match self
                         .rt
                         .block_on(self.web3.eth().send_raw_transaction(signed.raw_transaction))
                     {
-                        metric.hash = Some(hash);
-                        let mut retry = wait_time;
-                        loop {
-                            if let Some(receipt) = self.transaction_receipt(hash) {
-                                if let Some(status) = receipt.status {
-                                    if status == U64::from(1u64) {
-                                        succeed += 1;
-                                        metric.status = 1;
+                        Ok(hash) => {
+                            metric.hash = Some(hash);
+                            let mut retry = wait_time;
+                            loop {
+                                if let Some(receipt) = self.transaction_receipt(hash) {
+                                    if let Some(status) = receipt.status {
+                                        if status == U64::from(1u64) {
+                                            succeed += 1;
+                                            metric.status = 1;
+                                        }
                                     }
-                                }
-                                metric.wait = wait_time + 1 - retry;
-                                break;
-                            } else {
-                                std::thread::sleep(Duration::from_secs(1));
-                                retry -= 1;
-                                if retry == 0 {
-                                    metric.wait = wait_time;
+                                    metric.wait = wait_time + 1 - retry;
                                     break;
+                                } else {
+                                    std::thread::sleep(Duration::from_secs(1));
+                                    retry -= 1;
+                                    if retry == 0 {
+                                        metric.wait = wait_time;
+                                        break;
+                                    }
                                 }
                             }
                         }
+                        Err(e) => {
+                            println!("{}/{} {:?} {:?}", idx, total, metric.to, e);
+                            metric.status = 97;
+                        }
                     }
+                } else {
+                    metric.status = 98;
                 }
                 println!("{}/{} {:?} {}", idx, total, metric.to, metric.status == 1);
                 idx += 1;
