@@ -186,45 +186,50 @@ impl TestClient {
             })
             // Sign the txs (can be done offline)
             .for_each(|(tx_object, mut metric)| {
-                if let Ok(signed) = self
+                match self
                     .rt
                     .block_on(self.web3.accounts().sign_transaction(tx_object, &source_sk))
                 {
-                    match self
-                        .rt
-                        .block_on(self.web3.eth().send_raw_transaction(signed.raw_transaction))
-                    {
-                        Ok(hash) => {
-                            metric.hash = Some(hash);
-                            let mut retry = wait_time;
-                            loop {
-                                if let Some(receipt) = self.transaction_receipt(hash) {
-                                    if let Some(status) = receipt.status {
-                                        if status == U64::from(1u64) {
-                                            succeed += 1;
-                                            metric.status = 1;
+                    Ok(signed) => {
+                        match self
+                            .rt
+                            .block_on(self.web3.eth().send_raw_transaction(signed.raw_transaction))
+                        {
+                            Ok(hash) => {
+                                metric.hash = Some(hash);
+                                let mut retry = wait_time;
+                                loop {
+                                    if let Some(receipt) = self.transaction_receipt(hash) {
+                                        if let Some(status) = receipt.status {
+                                            if status == U64::from(1u64) {
+                                                succeed += 1;
+                                                metric.status = 1;
+                                            }
                                         }
-                                    }
-                                    metric.wait = wait_time + 1 - retry;
-                                    break;
-                                } else {
-                                    std::thread::sleep(Duration::from_secs(1));
-                                    retry -= 1;
-                                    if retry == 0 {
-                                        metric.wait = wait_time;
+                                        metric.wait = wait_time + 1 - retry;
                                         break;
+                                    } else {
+                                        std::thread::sleep(Duration::from_secs(1));
+                                        retry -= 1;
+                                        if retry == 0 {
+                                            metric.wait = wait_time;
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                        }
-                        Err(e) => {
-                            println!("{}/{} {:?} {:?}", idx, total, metric.to, e);
-                            metric.status = 97;
+                            Err(e) => {
+                                println!("{}/{} {:?} {:?}", idx, total, metric.to, e);
+                                metric.status = 97;
+                            }
                         }
                     }
-                } else {
-                    metric.status = 98;
+                    Err(e) => {
+                        println!("{}/{} {:?} {:?}", idx, total, metric.to, e);
+                        metric.status = 98;
+                    }
                 }
+
                 println!("{}/{} {:?} {}", idx, total, metric.to, metric.status == 1);
                 idx += 1;
                 results.push(metric);
