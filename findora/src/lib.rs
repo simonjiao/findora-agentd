@@ -6,6 +6,8 @@ use bip32::{DerivationPath, XPrv};
 use libsecp256k1::{PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
+use std::cell::RefCell;
+use std::ops::AddAssign;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -116,8 +118,8 @@ impl TestClient {
         self.rt.block_on(self.eth.block_number()).ok()
     }
 
-    pub fn nonce(&self, from: Address) -> Option<U256> {
-        self.rt.block_on(self.eth.transaction_count(from, None)).ok()
+    pub fn nonce(&self, from: Address, block: Option<BlockNumber>) -> Option<U256> {
+        self.rt.block_on(self.eth.transaction_count(from, block)).ok()
     }
 
     pub fn gas_price(&self) -> Option<U256> {
@@ -151,37 +153,35 @@ impl TestClient {
     pub fn distribution(
         &self,
         source: Option<(secp256k1::SecretKey, Address)>,
-        accounts: &[Address],
-        amounts: &[U256],
+        targets: &[(Address, U256)],
         block_time: &Option<u64>,
     ) -> web3::Result<TransferMetrics> {
         let mut results = vec![];
         let mut succeed = 0u64;
         let mut idx = 1u64;
-        let total = accounts.len();
+        let total = targets.len();
         let source_address = source.unwrap_or((self.root_sk, self.root_addr)).1;
         let source_sk = source.unwrap_or((self.root_sk, self.root_addr)).0;
         let wait_time = block_time.unwrap_or(BLOCK_TIME) * 3 + 1;
         let chain_id = self.chain_id().map(|id| id.as_u64());
         let gas_price = self.gas_price();
-        accounts
+        let nonce = RefCell::new(self.nonce(source_address, None).unwrap());
+        targets
             .iter()
-            .zip(amounts)
-            .map(|(account, &am)| {
+            .map(|(account, am)| {
                 let to = Some(*account);
                 let tm = TxMetric {
                     to: to.unwrap(),
-                    amount: am,
+                    amount: *am,
                     status: 99,
                     ..Default::default()
                 };
-                let nonce = self.nonce(source_address);
                 let tp = TransactionParameters {
                     to,
-                    value: am,
+                    value: *am,
                     chain_id,
                     gas_price,
-                    nonce,
+                    nonce: Some(*nonce.borrow()),
                     ..Default::default()
                 };
                 (tp, tm)
@@ -212,15 +212,20 @@ impl TestClient {
                                     }
                                 }
                             }
+                            nonce.borrow_mut().add_assign(U256::one());
                         }
                         Err(e) => {
                             println!("{}/{} {:?} {:?}", idx, total, metric.to, e);
                             metric.status = 97;
+                            // retrieve nonce if failed to send tx
+                            *nonce.borrow_mut() = self.nonce(source_address, None).unwrap();
                         }
                     },
                     Err(e) => {
                         println!("{}/{} {:?} {:?}", idx, total, metric.to, e);
                         metric.status = 98;
+                        // retrieve nonce if failed to send tx
+                        *nonce.borrow_mut() = self.nonce(source_address, None).unwrap();
                     }
                 }
 
@@ -233,7 +238,7 @@ impl TestClient {
 
         Ok(TransferMetrics {
             from: source_address,
-            total: accounts.len() as u64,
+            total: targets.len() as u64,
             succeed,
             txs: results,
         })
