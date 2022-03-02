@@ -8,7 +8,7 @@ use std::{
 
 use feth::{one_eth_key, utils::*, KeyPair, TestClient, BLOCK_TIME};
 use rayon::prelude::*;
-use web3::types::Address;
+use web3::types::{Address, TransactionId, H256};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about=None)]
@@ -65,9 +65,9 @@ enum Commands {
         #[clap(long)]
         load: bool,
 
-        /// re-fund account with insufficient balance
+        /// re-deposit account with insufficient balance
         #[clap(long)]
-        refund: bool,
+        redeposit: bool,
     },
     /// check ethereum account information
     Info {
@@ -78,6 +78,17 @@ enum Commands {
         /// ethereum address
         #[clap(long)]
         account: Address,
+    },
+
+    /// Transaction Operations
+    Transaction {
+        /// ethereum-compatible network
+        #[clap(long)]
+        network: String,
+
+        /// transaction hash
+        #[clap(long)]
+        hash: H256,
     },
 }
 
@@ -106,6 +117,14 @@ fn calc_pool_size(keys: usize, max_par: usize, min_par: usize) -> usize {
     max_pool_size
 }
 
+fn eth_transaction(network: &str, hash: H256) {
+    let network = real_network(network);
+    // use first endpoint to fund accounts
+    let client = TestClient::setup(network[0].clone());
+    let tx = client.transaction(TransactionId::from(hash));
+    println!("{:?}", tx);
+}
+
 fn eth_account(network: &str, account: Address) {
     let network = real_network(network);
     // use first endpoint to fund accounts
@@ -115,7 +134,7 @@ fn eth_account(network: &str, account: Address) {
     println!("{:?}: {} {:?}", account, balance, nonce);
 }
 
-fn fund_accounts(network: &str, block_time: u64, count: u64, am: u64, load: bool, refund: bool) {
+fn fund_accounts(network: &str, block_time: u64, count: u64, am: u64, load: bool, redeposit: bool) {
     let mut amount = web3::types::U256::exp10(17); // 0.1 eth
     amount.mul_assign(am);
 
@@ -153,11 +172,13 @@ fn fund_accounts(network: &str, block_time: u64, count: u64, am: u64, load: bool
         std::fs::write("source_keys.001", &data).unwrap();
     }
 
+    let total = source_keys.len();
     let source_accounts = source_keys
         .into_iter()
-        .filter_map(|key| {
+        .enumerate()
+        .filter_map(|(idx, key)| {
             let from = Address::from_str(key.address.as_str()).unwrap();
-            if refund {
+            let account = if redeposit {
                 let balance = client.balance(from, None);
                 if balance < amount {
                     Some((from, amount))
@@ -166,7 +187,11 @@ fn fund_accounts(network: &str, block_time: u64, count: u64, am: u64, load: bool
                 }
             } else {
                 Some((from, amount))
+            };
+            if let Some(a) = account.as_ref() {
+                println!("{}/{} {:?}", idx, total, a);
             }
+            account
         })
         .collect::<Vec<_>>();
     // 1000 eth
@@ -188,13 +213,17 @@ fn main() -> web3::Result<()> {
             count,
             amount,
             load,
-            refund,
+            redeposit,
         }) => {
-            fund_accounts(network.as_ref(), *block_time, *count, *amount, *load, *refund);
+            fund_accounts(network.as_ref(), *block_time, *count, *amount, *load, *redeposit);
             return Ok(());
         }
         Some(Commands::Info { network, account }) => {
             eth_account(network.as_ref(), *account);
+            return Ok(());
+        }
+        Some(Commands::Transaction { network, hash }) => {
+            eth_transaction(network.as_ref(), *hash);
             return Ok(());
         }
         None => {}
@@ -204,11 +233,10 @@ fn main() -> web3::Result<()> {
     let min_par = cli.min_parallelism;
     let max_par = cli.max_parallelism;
     let source_file = cli.source;
-    let _prog = "feth".to_owned();
     let block_time = Some(cli.block_time);
     let source_keys: Vec<KeyPair> =
         serde_json::from_str(std::fs::read_to_string(source_file).unwrap().as_str()).unwrap();
-    let target_amount = web3::types::U256::exp10(17); // 0.1 eth
+    let target_amount = web3::types::U256::exp10(16); // 0.01 eth
 
     println!("logical cpus {}, physical cpus {}", log_cpus(), phy_cpus());
     check_parallel_args(max_par, min_par);
