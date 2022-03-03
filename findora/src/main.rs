@@ -270,8 +270,10 @@ fn main() -> web3::Result<()> {
         .filter_map(|kp| {
             let balance = client.balance(kp.address[2..].parse().unwrap(), None);
             if balance <= target_amount.mul(count) {
+                println!("account {} filtered", kp.address);
                 None
             } else {
+                println!("account {} added to pool", kp.address);
                 Some(kp)
             }
         })
