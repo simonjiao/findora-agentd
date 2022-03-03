@@ -268,30 +268,25 @@ fn main() -> web3::Result<()> {
     let source_keys = source_keys
         .par_iter()
         .filter_map(|kp| {
-            let balance = client.balance(kp.address[2..].parse().unwrap(), None);
+            let (secret, address) = (
+                secp256k1::SecretKey::from_str(kp.private.as_str()).unwrap(),
+                Address::from_str(kp.address.as_str()).unwrap(),
+            );
+            let balance = client.balance(address, None);
             if balance <= target_amount.mul(count) {
-                println!("account {} filtered", kp.address);
                 None
             } else {
-                println!("account {} added to pool", kp.address);
-                Some(kp)
-            }
-        })
-        .map(|m| {
-            (
-                (
-                    secp256k1::SecretKey::from_str(m.private.as_str()).unwrap(),
-                    Address::from_str(m.address.as_str()).unwrap(),
-                ),
-                (0..count)
+                let target = (0..count)
                     .map(|_| {
                         (
                             Address::from_str(one_eth_key().address.as_str()).unwrap(),
                             target_amount,
                         )
                     })
-                    .collect::<Vec<_>>(),
-            )
+                    .collect::<Vec<_>>();
+                println!("account {:?} added to source pool", address);
+                Some(((secret, address), target))
+            }
         })
         .collect::<Vec<_>>();
 
