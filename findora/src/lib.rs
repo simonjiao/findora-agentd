@@ -187,7 +187,7 @@ impl TestClient {
         let wait_time = block_time.unwrap_or(BLOCK_TIME) * 3 + 1;
         let chain_id = self.chain_id().map(|id| id.as_u64());
         let gas_price = self.gas_price();
-        let nonce = RefCell::new(self.nonce(source_address, Some(BlockNumber::Pending)).unwrap());
+        let nonce = RefCell::new(self.nonce(source_address, None).unwrap());
         targets
             .iter()
             .map(|(account, am)| {
@@ -234,7 +234,7 @@ impl TestClient {
                         Err(e) => {
                             metric.status = 97;
                             // retrieve nonce if failed to send tx
-                            *nonce.borrow_mut() = self.nonce(source_address, Some(BlockNumber::Pending)).unwrap();
+                            *nonce.borrow_mut() = self.nonce(source_address, None).unwrap();
                             // give it another chance
                             tx_object.nonce = Some(*nonce.borrow());
                             if let Ok(signed) = self.rt.block_on(self.accounts.sign_transaction(tx_object, &source_sk))
@@ -257,13 +257,12 @@ impl TestClient {
                                     }
                                     Err(e) => {
                                         println!("give up {}/{} {:?} {:?}", idx + 1, total, metric.to, e);
-                                        *nonce.borrow_mut() =
-                                            self.nonce(source_address, Some(BlockNumber::Pending)).unwrap();
+                                        *nonce.borrow_mut() = self.nonce(source_address, None).unwrap();
                                     }
                                 }
                             } else {
                                 println!("give up {}/{} {:?} {:?}", idx + 1, total, metric.to, e);
-                                *nonce.borrow_mut() = self.nonce(source_address, Some(BlockNumber::Pending)).unwrap();
+                                *nonce.borrow_mut() = self.nonce(source_address, None).unwrap();
                             }
                         }
                     },
@@ -271,7 +270,7 @@ impl TestClient {
                         println!("{}/{} {:?} {:?}", idx + 1, total, metric.to, e);
                         metric.status = 98;
                         // retrieve nonce if failed to send tx
-                        *nonce.borrow_mut() = self.nonce(source_address, Some(BlockNumber::Pending)).unwrap();
+                        *nonce.borrow_mut() = self.nonce(source_address, None).unwrap();
                     }
                 }
 
