@@ -51,7 +51,7 @@ fi
 
 check_env() {
   ((START_MODE != 2)) || return 1
-  for i in wget curl; do
+  for i in wget curl jq; do
     which $i >/dev/null 2>&1
     if [[ 0 -ne $? ]]; then
       echo -e "\n\033[31;01m${i}\033[00m has not been installed properly!\n"
@@ -110,7 +110,7 @@ if ((START_MODE != 2)); then
   # clean old data and config files
   sudo rm -rf ${ROOT_DIR}/findorad || exit 1
 
-  docker run --rm -v ${ROOT_DIR}/tendermint:/root/.tendermint ${FINDORAD_IMG} init --${NAMESPACE}|| exit 1
+  docker run --rm -v ${ROOT_DIR}/tendermint:/root/.tendermint "${FINDORAD_IMG}" init --${NAMESPACE}|| exit 1
 
   sudo chown -R "$(id -u)":"$(id -g)" ${ROOT_DIR}/tendermint/
 fi
@@ -162,7 +162,7 @@ docker run -d \
     -p 26657:26657 \
     -p 8545:8545 \
     -e EVM_CHAIN_ID="$EVM_CHAIN_ID" \
-    -e RUST_LOG="abciapp=info,baseapp=debug,account=debug,ethereum=debug,evm=debug,eth_rpc=debug" \
+    -e RUST_LOG="abciapp=info,baseapp=debug,account=debug,ethereum=debug,evm=info,eth_rpc=debug" \
     --name findorad \
     "$FINDORAD_IMG" node \
     --ledger-dir /tmp/findora \
@@ -173,9 +173,9 @@ docker run -d \
 
 sleep 10
 
-curl 'http://localhost:26657/status'; echo
-curl 'http://localhost:8668/version'; echo
-curl -X POST -H "Content-Type: application/json" \
+curl -s 'http://localhost:26657/status' | jq -r .result.node_info.network
+curl -s 'http://localhost:8668/version'; echo
+curl -s -X POST -H "Content-Type: application/json" \
      -d '{"jsonrpc":"2.0","method":"eth_hashrate","id":1}' \
      'http://localhost:8545'; echo
 
