@@ -18,8 +18,22 @@ fi
 ROOT_DIR=$3
 [ -n "$ROOT_DIR" ] || ROOT_DIR=/data/findora/$NAMESPACE
 
+if ChainID=$(curl -s -X POST -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","method":"eth_chainId","id":1}' \
+     "$SERV_URL:8545"); then
+    HEXID=$(echo "$ChainID" | jq -r .result |awk -F'x' '{print $2}')
+    if ! EVM_CHAIN_ID=$(echo "obase=10; ibase=16; $HEXID" | bc); then
+      echo "Invalid Evm chain id"
+      exit 2
+    fi
+else
+  echo "Failed to obtain chain id"
+  exit 2
+fi
+
 echo "using image $IMG"
 echo "root directory $ROOT_DIR"
+echo "chain id $EVM_CHAIN_ID"
 
 START_MODE=1
 if [ "$1" = "snapshot" ]; then
@@ -147,10 +161,10 @@ docker run -d \
     -p 8667:8667 \
     -p 26657:26657 \
     -p 8545:8545 \
-    -e EVM_CHAIN_ID=2153 \
+    -e EVM_CHAIN_ID="$EVM_CHAIN_ID" \
     -e RUST_LOG="abciapp=info,baseapp=debug,account=debug,ethereum=debug,evm=debug,eth_rpc=debug" \
     --name findorad \
-    ${FINDORAD_IMG} node \
+    "$FINDORAD_IMG" node \
     --ledger-dir /tmp/findora \
     --tendermint-host 0.0.0.0 \
     --tendermint-node-key-config-path="/root/.tendermint/config/priv_validator_key.json" \
