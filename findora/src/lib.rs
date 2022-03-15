@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
 use std::{
     cell::RefCell,
-    error::Error,
+    error::Error as StdError,
     ops::AddAssign,
     str::FromStr,
     sync::{
@@ -94,6 +94,14 @@ pub struct NetworkInfo {
     pub block_number: U64,
     pub gas_price: U256,
     pub frc20_code: Option<Bytes>,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Error {
+    CheckTx,
+    SyncTx,
+    SendErr,
+    Unknown,
 }
 
 impl TestClient {
@@ -207,6 +215,24 @@ impl TestClient {
         }
     }
 
+    pub fn parse_error(&self, err: Option<&dyn StdError>) -> Error {
+        match err {
+            Some(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("broadcast_tx_sync") {
+                    Error::SyncTx
+                } else if err_str.contains("Transaction check error") {
+                    Error::CheckTx
+                } else if err_str.contains("failed to send request") {
+                    Error::SendErr
+                } else {
+                    Error::Unknown
+                }
+            }
+            None => Error::Unknown,
+        }
+    }
+
     pub fn distribution(
         &self,
         id: usize,
@@ -267,8 +293,8 @@ impl TestClient {
                                 }
                             }
                             Err(e) => {
-                                if let Some(err) = e.source() {
-                                    if err.to_string().contains("broadcast_tx_sync") {
+                                match self.parse_error(e.source()) {
+                                    Error::SyncTx => {
                                         if let Ok(mut val) = self.overflow_flag.compare_exchange(
                                             0,
                                             id,
@@ -281,6 +307,16 @@ impl TestClient {
                                             println!("overflow flag set by {}, me {}", val, id);
                                         }
                                         self.check_wait_overflow(id, None);
+                                    }
+                                    Error::SendErr => {
+                                        // TODO: adjust timeout
+                                        println!("Failed to send request, increase timeout could be helpful");
+                                    }
+                                    Error::CheckTx => {
+                                        println!("Transaction check error");
+                                    }
+                                    Error::Unknown => {
+                                        println!("unknown error");
                                     }
                                 }
                                 println!("retry for error {:?}", e);
@@ -298,6 +334,7 @@ impl TestClient {
                                 {
                                     let mut changed = false;
                                     while self.overflow_flag.load(Ordering::Relaxed) == id {
+                                        println!("try to check if error persists {}", id);
                                         if self
                                             .rt
                                             .block_on(self.eth.send_raw_transaction(signed.raw_transaction.clone()))
