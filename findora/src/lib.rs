@@ -7,18 +7,23 @@ use libsecp256k1::{PublicKey, SecretKey};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use sha3::{Digest, Keccak256};
-use std::cell::RefCell;
-use std::ops::AddAssign;
-use std::str::FromStr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    cell::RefCell,
+    error::Error,
+    ops::AddAssign,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use tokio::runtime::Runtime;
-use web3::types::{Block, BlockId};
 use web3::{
     transports::Http,
     types::{
-        Address, BlockNumber, Bytes, Transaction, TransactionId, TransactionParameters, TransactionReceipt, H160, H256,
-        U256, U64,
+        Address, Block, BlockId, BlockNumber, Bytes, Transaction, TransactionId, TransactionParameters,
+        TransactionReceipt, H160, H256, U256, U64,
     },
 };
 
@@ -79,6 +84,7 @@ pub struct TestClient {
     pub accounts: Arc<web3::api::Accounts<Http>>,
     pub root_sk: secp256k1::SecretKey,
     pub root_addr: Address,
+    pub overflow_flag: AtomicUsize,
     rt: Runtime,
 }
 
@@ -114,6 +120,7 @@ impl TestClient {
             root_sk,
             root_addr,
             rt,
+            overflow_flag: AtomicUsize::from(0),
         }
     }
 
@@ -190,8 +197,19 @@ impl TestClient {
         }
     }
 
+    pub fn check_wait_overflow(&self, id: usize, interval: Option<u64>) {
+        loop {
+            let flag = self.overflow_flag.load(Ordering::Relaxed);
+            if flag == 0 || flag == id {
+                break;
+            }
+            std::thread::sleep(Duration::from_secs(interval.unwrap_or(3)));
+        }
+    }
+
     pub fn distribution(
         &self,
+        id: usize,
         source: Option<(secp256k1::SecretKey, Address)>,
         targets: &[(Address, U256)],
         block_time: &Option<u64>,
@@ -234,65 +252,115 @@ impl TestClient {
                     .rt
                     .block_on(self.accounts.sign_transaction(tx_object.clone(), &source_sk))
                 {
-                    Ok(signed) => match self.rt.block_on(self.eth.send_raw_transaction(signed.raw_transaction)) {
-                        Ok(hash) => {
-                            metric.hash = Some(hash);
-                            println!("{}/{} {:?} {:?}", idx + 1, total, metric.to, hash);
-                            nonce.borrow_mut().add_assign(U256::one());
-                        }
-                        Err(e) => {
-                            metric.status = 97;
-                            let wait_time = 2u64;
-                            last_err_cnt.borrow_mut().add_assign(1);
-
-                            let factor = *last_err_cnt.borrow();
-                            std::thread::sleep(Duration::from_secs(wait_time * factor));
-                            // retrieve nonce if failed to send tx
-                            *nonce.borrow_mut() = self.pending_nonce(source_address).unwrap();
-                            // give it another chance
-                            tx_object.nonce = Some(*nonce.borrow());
-                            if let Ok(signed) = self.rt.block_on(self.accounts.sign_transaction(tx_object, &source_sk))
-                            {
-                                match self.rt.block_on(self.eth.send_raw_transaction(signed.raw_transaction)) {
-                                    Ok(hash) => {
-                                        metric.hash = Some(hash);
-                                        println!(
-                                            "retry {}/{} {:?} {:?} {}",
-                                            idx + 1,
-                                            total,
-                                            metric.to,
-                                            hash,
-                                            *last_err_cnt.borrow()
-                                        );
-                                        *last_err_cnt.borrow_mut() = 0;
-                                        nonce.borrow_mut().add_assign(U256::one());
-                                    }
-                                    Err(e) => {
-                                        println!(
-                                            "give up send {}/{} {:?} {} {:?}",
-                                            idx + 1,
-                                            total,
-                                            metric.to,
-                                            *last_err_cnt.borrow(),
-                                            e
-                                        );
-                                        last_err_cnt.borrow_mut().add_assign(1);
-                                        *nonce.borrow_mut() = self.pending_nonce(source_address).unwrap();
+                    Ok(signed) => {
+                        self.check_wait_overflow(id, None);
+                        match self.rt.block_on(self.eth.send_raw_transaction(signed.raw_transaction)) {
+                            Ok(hash) => {
+                                metric.hash = Some(hash);
+                                println!("{}/{} {:?} {:?}", idx + 1, total, metric.to, hash);
+                                nonce.borrow_mut().add_assign(U256::one());
+                                if let Ok(val) =
+                                    self.overflow_flag
+                                        .compare_exchange(id, 0, Ordering::Acquire, Ordering::Relaxed)
+                                {
+                                    println!("overflow flag cleared by {} me {}", val, id);
+                                }
+                            }
+                            Err(e) => {
+                                if let Some(err) = e.source() {
+                                    if err.to_string().contains("broadcast_tx_sync") {
+                                        if let Ok(mut val) = self.overflow_flag.compare_exchange(
+                                            0,
+                                            id,
+                                            Ordering::Acquire,
+                                            Ordering::Relaxed,
+                                        ) {
+                                            if val == 0 {
+                                                val = id;
+                                            }
+                                            println!("overflow flag set by {}, me {}", val, id);
+                                        }
+                                        self.check_wait_overflow(id, None);
                                     }
                                 }
-                            } else {
-                                println!(
-                                    "give up retry sign {}/{} {:?} {} {:?}",
-                                    idx + 1,
-                                    total,
-                                    metric.to,
-                                    *last_err_cnt.borrow(),
-                                    e
-                                );
+                                println!("retry for error {:?}", e);
+                                metric.status = 97;
+                                let wait_time = 2u64;
+                                last_err_cnt.borrow_mut().add_assign(1);
+                                let factor = *last_err_cnt.borrow();
+                                std::thread::sleep(Duration::from_secs(wait_time * factor));
+                                // retrieve nonce if failed to send tx
                                 *nonce.borrow_mut() = self.pending_nonce(source_address).unwrap();
+                                // give it another chance
+                                tx_object.nonce = Some(*nonce.borrow());
+                                if let Ok(signed) =
+                                    self.rt.block_on(self.accounts.sign_transaction(tx_object, &source_sk))
+                                {
+                                    let mut changed = false;
+                                    while self.overflow_flag.load(Ordering::Relaxed) == id {
+                                        if self
+                                            .rt
+                                            .block_on(self.eth.send_raw_transaction(signed.raw_transaction.clone()))
+                                            .is_ok()
+                                        {
+                                            if self.overflow_flag.compare_exchange(
+                                                id,
+                                                0,
+                                                Ordering::Acquire,
+                                                Ordering::Relaxed,
+                                            ) != Ok(id)
+                                            {
+                                                panic!("This should never happened");
+                                            } else {
+                                                changed = true;
+                                                break;
+                                            }
+                                        }
+                                        std::thread::sleep(Duration::from_secs(3));
+                                    }
+                                    if !changed {
+                                        match self.rt.block_on(self.eth.send_raw_transaction(signed.raw_transaction)) {
+                                            Ok(hash) => {
+                                                metric.hash = Some(hash);
+                                                println!(
+                                                    "retry {}/{} {:?} {:?} {}",
+                                                    idx + 1,
+                                                    total,
+                                                    metric.to,
+                                                    hash,
+                                                    *last_err_cnt.borrow()
+                                                );
+                                                *last_err_cnt.borrow_mut() = 0;
+                                                nonce.borrow_mut().add_assign(U256::one());
+                                            }
+                                            Err(e) => {
+                                                println!(
+                                                    "give up send {}/{} {:?} {} {:?}",
+                                                    idx + 1,
+                                                    total,
+                                                    metric.to,
+                                                    *last_err_cnt.borrow(),
+                                                    e
+                                                );
+                                                last_err_cnt.borrow_mut().add_assign(1);
+                                                *nonce.borrow_mut() = self.pending_nonce(source_address).unwrap();
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    println!(
+                                        "give up retry sign {}/{} {:?} {} {:?}",
+                                        idx + 1,
+                                        total,
+                                        metric.to,
+                                        *last_err_cnt.borrow(),
+                                        e
+                                    );
+                                    *nonce.borrow_mut() = self.pending_nonce(source_address).unwrap();
+                                }
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         println!("give up sign {}/{} {:?} {:?}", idx + 1, total, metric.to, e);
                         metric.status = 98;
