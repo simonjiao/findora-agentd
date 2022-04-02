@@ -17,22 +17,23 @@ check_env() {
 
 check_env
 
-# default: syncing from block 0
-START_MODE=1
-# image version
-VER=$2
-# root directory
-ROOT_DIR=$3
-
 if [ "$1" = "snapshot" ]; then
-    START_MODE=0
+  START_MODE=0
 elif [ "$1" = "restart" ]; then
   START_MODE=2
+elif [ "$1" = "fresh" ]; then
+  START_MODE=1
 else
-    sudo rm -rf \
-    "$ROOT_DIR"/findorad \
-    "$ROOT_DIR"/tendermint
+  echo "need a start mode"
+  exit 1
 fi
+
+# image version
+VER=$2
+# EVM chain id
+EVM_CHAIN_ID=$3
+# root directory
+ROOT_DIR=$4
 
 if [ -n "$VER" ]; then
   NODE_IMG="$IMG_PREFIX:$VER"
@@ -50,14 +51,16 @@ fi
 
 [ -n "$ROOT_DIR" ] || ROOT_DIR=/data/findora/$NAMESPACE
 
-if ChainID=$(curl -s -X POST -H "Content-Type: application/json" \
-     -d '{"jsonrpc":"2.0","method":"eth_chainId","id":1}' \
-     "$SERV_URL:8545"); then
-    HEX=$(echo "$ChainID" | jq -r .result |awk -F'x' '{print $2}')
-    if ! EVM_CHAIN_ID=$(echo "obase=10; ibase=16; $HEX" | bc); then
-      echo "Invalid Evm chain id"
-      exit 2
-    fi
+if [ -n "$EVM_CHAIN_ID" ]; then
+  :
+elif ChainID=$(curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_chainId","id":1}' \
+  "$SERV_URL:8545"); then
+  HEX=$(echo "$ChainID" | jq -r .result | awk -F'x' '{print $2}')
+  if ! EVM_CHAIN_ID=$(echo "obase=10; ibase=16; $HEX" | bc); then
+    echo "Invalid Evm chain id"
+    exit 2
+  fi
 else
   echo "Failed to obtain chain id"
   exit 2
@@ -73,43 +76,45 @@ echo "chain id $EVM_CHAIN_ID"
 if ((START_MODE != 2)); then
   # clean old data and config files
   sudo rm -rf ${ROOT_DIR}/findorad || exit 1
-  docker run --rm -v ${ROOT_DIR}/tendermint:/root/.tendermint "${NODE_IMG}" init --${NAMESPACE}|| exit 1
+  sudo rm -rf ${ROOT_DIR}/tendermint|| exit 1
+
+  docker run --rm -v ${ROOT_DIR}/tendermint:/root/.tendermint "${NODE_IMG}" init --${NAMESPACE} || exit 1
   sudo chown -R "$(id -u)":"$(id -g)" ${ROOT_DIR}/tendermint/
 fi
 
 if ((START_MODE == 1)); then
-    mkdir -p ${ROOT_DIR}/tendermint/config
-    mkdir -p ${ROOT_DIR}/tendermint/data
-    
-    cp -f ${ROOT_DIR}/../$NAMESPACE.config.toml ${ROOT_DIR}/tendermint/config/config.toml
-    cp -f ${ROOT_DIR}/../zero_height.json ${ROOT_DIR}/tendermint/data/priv_validator_state.json
+  mkdir -p ${ROOT_DIR}/tendermint/config
+  mkdir -p ${ROOT_DIR}/tendermint/data
 
-    rm -rf "${ROOT_DIR}/findorad"
-    rm -rf "${ROOT_DIR}/tendermint/config/addrbook.json"
+  #cp -f ${ROOT_DIR}/../$NAMESPACE.config.toml ${ROOT_DIR}/tendermint/config/config.toml
+  cp -f ${ROOT_DIR}/../zero_height.json ${ROOT_DIR}/tendermint/data/priv_validator_state.json
+
+  rm -rf "${ROOT_DIR}/findorad"
+  rm -rf "${ROOT_DIR}/tendermint/config/addrbook.json"
 elif ((START_MODE == 0)); then
-    ###################
-    # get snapshot    #
-    ###################
-    # download latest link and get url
-    wget -O "${ROOT_DIR}/latest" "https://${ENV}-${NAMESPACE}-us-west-2-chain-data-backup.s3.us-west-2.amazonaws.com/latest"
-    CHAINDATA_URL=$(cut -d , -f 1 "${ROOT_DIR}/latest")
-    echo "$CHAINDATA_URL"
-    
-    # remove old data 
-    rm -rf "${ROOT_DIR}/findorad"
-    rm -rf "${ROOT_DIR}/tendermint/data"
-    rm -rf "${ROOT_DIR}/tendermint/config/addrbook.json"
-    
-    wget -O "${ROOT_DIR}/snapshot" "${CHAINDATA_URL}" 
-    mkdir "${ROOT_DIR}/snapshot_data"
-    echo "extracting snapshot data..."
-    tar zxf "${ROOT_DIR}/snapshot" -C "${ROOT_DIR}/snapshot_data"
+  ###################
+  # get snapshot    #
+  ###################
+  # download latest link and get url
+  wget -O "${ROOT_DIR}/latest" "https://${ENV}-${NAMESPACE}-us-west-2-chain-data-backup.s3.us-west-2.amazonaws.com/latest"
+  CHAINDATA_URL=$(cut -d , -f 1 "${ROOT_DIR}/latest")
+  echo "$CHAINDATA_URL"
 
-    echo "moving data to right place..."
-    mv "${ROOT_DIR}/snapshot_data/data/ledger" "${ROOT_DIR}/findorad"
-    mv "${ROOT_DIR}/snapshot_data/data/tendermint/mainnet/node0/data" "${ROOT_DIR}/tendermint/data"
-    
-    rm -rf ${ROOT_DIR}/snapshot_data
+  # remove old data
+  rm -rf "${ROOT_DIR}/findorad"
+  rm -rf "${ROOT_DIR}/tendermint/data"
+  rm -rf "${ROOT_DIR}/tendermint/config/addrbook.json"
+
+  wget -O "${ROOT_DIR}/snapshot" "${CHAINDATA_URL}"
+  mkdir "${ROOT_DIR}/snapshot_data"
+  echo "extracting snapshot data..."
+  tar zxf "${ROOT_DIR}/snapshot" -C "${ROOT_DIR}/snapshot_data"
+
+  echo "moving data to right place..."
+  mv "${ROOT_DIR}/snapshot_data/data/ledger" "${ROOT_DIR}/findorad"
+  mv "${ROOT_DIR}/snapshot_data/data/tendermint/mainnet/node0/data" "${ROOT_DIR}/tendermint/data"
+
+  rm -rf ${ROOT_DIR}/snapshot_data
 fi
 
 ###################
@@ -118,29 +123,31 @@ fi
 
 docker rm -f findorad || exit 1
 docker run -d \
-    -v ${ROOT_DIR}/tendermint:/root/.tendermint \
-    -v ${ROOT_DIR}/findorad:/tmp/findora \
-    -p 8669:8669 \
-    -p 8668:8668 \
-    -p 8667:8667 \
-    -p 26657:26657 \
-    -p 8545:8545 \
-    -e EVM_CHAIN_ID="$EVM_CHAIN_ID" \
-    -e RUST_LOG="abciapp=info,baseapp=debug,account=debug,ethereum=debug,evm=info,eth_rpc=debug" \
-    --name findorad \
-    "$NODE_IMG" node \
-    --ledger-dir /tmp/findora \
-    --tendermint-host 0.0.0.0 \
-    --tendermint-node-key-config-path="/root/.tendermint/config/priv_validator_key.json" \
-    --enable-query-service \
-    --enable-eth-api-service
+  -v ${ROOT_DIR}/tendermint:/root/.tendermint \
+  -v ${ROOT_DIR}/findorad:/tmp/findora \
+  -p 8669:8669 \
+  -p 8668:8668 \
+  -p 8667:8667 \
+  -p 26657:26657 \
+  -p 8545:8545 \
+  -e EVM_CHAIN_ID="$EVM_CHAIN_ID" \
+  -e RUST_LOG="abciapp=info,baseapp=debug,account=debug,ethereum=debug,evm=info,eth_rpc=debug" \
+  --name findorad \
+  "$NODE_IMG" node \
+  --ledger-dir /tmp/findora \
+  --tendermint-host 0.0.0.0 \
+  --tendermint-node-key-config-path="/root/.tendermint/config/priv_validator_key.json" \
+  --enable-query-service \
+  --enable-eth-api-service
 
 sleep 10
 
 curl -s 'http://localhost:26657/status' | jq -r .result.node_info.network
-curl -s 'http://localhost:8668/version'; echo
+curl -s 'http://localhost:8668/version'
+echo
 curl -s -X POST -H "Content-Type: application/json" \
-     -d '{"jsonrpc":"2.0","method":"eth_hashrate","id":1}' \
-     'http://localhost:8545'; echo
+  -d '{"jsonrpc":"2.0","method":"eth_hashrate","id":1}' \
+  'http://localhost:8545'
+echo
 
 echo "Local node initialized, syncing is running in background."
