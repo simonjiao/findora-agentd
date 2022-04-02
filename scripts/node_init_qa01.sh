@@ -28,12 +28,27 @@ else
   exit 1
 fi
 
+# use docker image or native binary
+RUNNER=$2
 # image version
-VER=$2
+VER=$3
 # EVM chain id
-EVM_CHAIN_ID=$3
+EVM_CHAIN_ID=$4
 # root directory
-ROOT_DIR=$4
+ROOT_DIR=$5
+
+case "${RUNNER}" in
+"native")
+  echo "using native binary"
+  ;;
+"img")
+  echo "using docker image"
+  ;;
+*)
+  echo "invalid runner"
+  exit 1
+  ;;
+esac
 
 if [ -n "$VER" ]; then
   NODE_IMG="$IMG_PREFIX:$VER"
@@ -66,7 +81,7 @@ else
   exit 2
 fi
 
-echo "using image $IMG"
+echo "using image $NODE_IMG"
 echo "root directory $ROOT_DIR"
 echo "chain id $EVM_CHAIN_ID"
 
@@ -76,9 +91,9 @@ echo "chain id $EVM_CHAIN_ID"
 if ((START_MODE != 2)); then
   # clean old data and config files
   sudo rm -rf ${ROOT_DIR}/findorad || exit 1
-  sudo rm -rf ${ROOT_DIR}/tendermint|| exit 1
+  sudo rm -rf ${ROOT_DIR}/tendermint || exit 1
 
-  docker run --rm -v ${ROOT_DIR}/tendermint:/root/.tendermint "${NODE_IMG}" init --${NAMESPACE} || exit 1
+  sudo docker run --rm -v ${ROOT_DIR}/tendermint:/root/.tendermint "${NODE_IMG}" init --${NAMESPACE} || exit 1
   sudo chown -R "$(id -u)":"$(id -g)" ${ROOT_DIR}/tendermint/
 fi
 
@@ -121,24 +136,39 @@ fi
 # Run local node #
 ###################
 
-docker rm -f findorad || exit 1
-docker run -d \
-  -v ${ROOT_DIR}/tendermint:/root/.tendermint \
-  -v ${ROOT_DIR}/findorad:/tmp/findora \
-  -p 8669:8669 \
-  -p 8668:8668 \
-  -p 8667:8667 \
-  -p 26657:26657 \
-  -p 8545:8545 \
-  -e EVM_CHAIN_ID="$EVM_CHAIN_ID" \
-  -e RUST_LOG="abciapp=info,baseapp=debug,account=debug,ethereum=debug,evm=info,eth_rpc=debug" \
-  --name findorad \
-  "$NODE_IMG" node \
-  --ledger-dir /tmp/findora \
-  --tendermint-host 0.0.0.0 \
-  --tendermint-node-key-config-path="/root/.tendermint/config/priv_validator_key.json" \
-  --enable-query-service \
-  --enable-eth-api-service
+sudo docker rm -f findorad || exit 1
+if [ "${RUNNER}" == "img" ]; then
+  sudo docker run -d \
+    -v ${ROOT_DIR}/tendermint:/root/.tendermint \
+    -v ${ROOT_DIR}/findorad:/tmp/findora \
+    -p 8669:8669 \
+    -p 8668:8668 \
+    -p 8667:8667 \
+    -p 26657:26657 \
+    -p 8545:8545 \
+    -e EVM_CHAIN_ID="$EVM_CHAIN_ID" \
+    -e RUST_LOG="abciapp=info,baseapp=debug,account=debug,ethereum=debug,evm=info,eth_rpc=debug" \
+    --name findorad \
+    "$NODE_IMG" node \
+    --ledger-dir /tmp/findora \
+    --tendermint-host 0.0.0.0 \
+    --tendermint-node-key-config-path="/root/.tendermint/config/priv_validator_key.json" \
+    --enable-query-service \
+    --enable-eth-api-service
+else
+  EVM_CHAIN_ID="$EVM_CHAIN_ID" \
+    RUST_LOG="abciapp=info,baseapp=debug,account=debug,ethereum=debug,evm=info,eth_rpc=debug" \
+    abcid --submission-service-port 8669 \
+    --ledger-service-port 8668 \
+    --checkpoint-file "${ROOT_DIR}"/checkpoint.toml \
+    --ledger-dir "${ROOT_DIR}"/findora \
+    --enable-query-service \
+    --enable-eth-api-service \
+    --tendermint-node-key-config-path "${ROOT_DIR}"/tendermint/config/priv_validator_key.json \
+    > "${ROOT_DIR}"/abcid.log 2>&1 &
+
+  tendermint node --home "${ROOT_DIR}"/tendermint --fast_sync=true > "${ROOT_DIR}"/tendermint.log 2>&1 &
+fi
 
 sleep 10
 
