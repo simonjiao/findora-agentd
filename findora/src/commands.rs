@@ -126,32 +126,35 @@ impl Cli {
             .filter_map(|line| line.map_or(None, |l| if l.contains("tps,") { Some(l) } else { None }))
             .for_each(|line| {
                 let words = line[52..].split(',').collect::<Vec<_>>();
-                match words.last() {
-                    Some(&"end of begin_block") => {
+                match words.last().map(|w| w.trim()) {
+                    Some("end of begin_block") => {
                         // tps,begin_block,31,31,td_height 781,end of begin_block
                         let height = words[words.len() - 2].split_whitespace().collect::<Vec<_>>()[1]
                             .parse::<u64>()
                             .unwrap();
-                        let bi = blocks.get(&height).unwrap();
-                        bi.borrow_mut().snapshot = words[2].parse::<u64>().unwrap();
-                        bi.borrow_mut().begin = words[3].parse::<u64>().unwrap();
+                        if let Some(bi) = blocks.get(&height) {
+                            bi.borrow_mut().snapshot = words[2].parse::<u64>().unwrap();
+                            bi.borrow_mut().begin = words[3].parse::<u64>().unwrap();
+                        }
                     }
-                    Some(&"end of end_block") => {
+                    Some("end of end_block") => {
                         // tps,end_block,6,td_height 781,end of end_block
                         let height = words[words.len() - 2].split_whitespace().collect::<Vec<_>>()[1]
                             .parse::<u64>()
                             .unwrap();
-                        let bi = blocks.get(&height).unwrap();
-                        bi.borrow_mut().end = words[2].parse::<u64>().unwrap();
+                        if let Some(bi) = blocks.get(&height) {
+                            bi.borrow_mut().end = words[2].parse::<u64>().unwrap();
+                        }
                     }
-                    Some(&"end of commit") => {
+                    Some("end of commit") => {
                         // tps,commit,2,60,62,td_height 781,end of commit
                         let height = words[words.len() - 2].split_whitespace().collect::<Vec<_>>()[1]
                             .parse::<u64>()
                             .unwrap();
-                        let bi = blocks.get(&height).unwrap();
-                        bi.borrow_mut().commit_evm = words[3].parse::<u64>().unwrap();
-                        bi.borrow_mut().commit = words[4].parse::<u64>().unwrap();
+                        if let Some(bi) = blocks.get(&height) {
+                            bi.borrow_mut().commit_evm = words[3].parse::<u64>().unwrap();
+                            bi.borrow_mut().commit = words[4].parse::<u64>().unwrap();
+                        }
                     }
                     _ => {}
                 }
