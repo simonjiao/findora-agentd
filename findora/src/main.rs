@@ -1,155 +1,18 @@
-use clap::{Parser, Subcommand};
+mod commands;
+
 use std::{
     cell::RefCell,
     cmp::Ordering,
     ops::{Mul, MulAssign, Sub},
-    path::PathBuf,
     str::FromStr,
     sync::{mpsc, Arc, Mutex},
 };
 
-use feth::{one_eth_key, utils::*, KeyPair, TestClient, BLOCK_TIME};
+use commands::*;
+use feth::{one_eth_key, utils::*, KeyPair, TestClient};
 use log::{debug, error, info};
 use rayon::prelude::*;
 use web3::types::{Address, Block, BlockId, BlockNumber, TransactionId, H256, U256, U64};
-
-#[derive(Parser, Debug)]
-#[clap(author, version, about, long_about=None)]
-struct Cli {
-    /// The maximum parallelism
-    #[clap(long, default_value_t = 200)]
-    max_parallelism: u64,
-
-    /// The count of transactions sent by a routine
-    #[clap(long, default_value_t = 0)]
-    count: u64,
-
-    /// the source account file
-    #[clap(long, parse(from_os_str), value_name = "FILE", default_value = "source_keys.001")]
-    source: PathBuf,
-
-    /// block time of the network
-    #[clap(long, default_value_t = BLOCK_TIME)]
-    block_time: u64,
-
-    /// findora network full-node urls: http://node0:8545,http://node1:8545
-    #[clap(long)]
-    network: Option<String>,
-
-    /// http request timeout, seconds
-    #[clap(long)]
-    timeout: Option<u64>,
-
-    /// save metric file or not
-    #[clap(long)]
-    keep_metric: bool,
-
-    #[clap(subcommand)]
-    command: Option<Commands>,
-}
-
-#[derive(Subcommand, Debug)]
-enum Commands {
-    /// Fund Ethereum accounts
-    Fund {
-        /// ethereum-compatible network
-        #[clap(long)]
-        network: String,
-
-        /// http request timeout, seconds
-        #[clap(long)]
-        timeout: Option<u64>,
-
-        /// block time of the network
-        #[clap(long, default_value_t = BLOCK_TIME)]
-        block_time: u64,
-
-        /// the number of Eth Account to be fund
-        #[clap(long, default_value_t = 0)]
-        count: u64,
-
-        /// how much 0.1-eth to fund
-        #[clap(long, default_value_t = 1)]
-        amount: u64,
-
-        /// load keys from file
-        #[clap(long)]
-        load: bool,
-
-        /// re-deposit account with insufficient balance
-        #[clap(long)]
-        redeposit: bool,
-    },
-    /// check ethereum account information
-    Info {
-        /// ethereum-compatible network
-        #[clap(long)]
-        network: String,
-
-        /// http request timeout, seconds
-        #[clap(long)]
-        timeout: Option<u64>,
-
-        /// ethereum address
-        #[clap(long)]
-        account: Address,
-    },
-
-    /// Transaction Operations
-    Transaction {
-        /// ethereum-compatible network
-        #[clap(long)]
-        network: String,
-
-        /// http request timeout, seconds
-        #[clap(long)]
-        timeout: Option<u64>,
-
-        /// transaction hash
-        #[clap(long)]
-        hash: H256,
-    },
-
-    /// Block Operations
-    Block {
-        /// ethereum-compatible network
-        #[clap(long)]
-        network: String,
-
-        /// http request timeout, seconds
-        #[clap(long)]
-        timeout: Option<u64>,
-
-        /// start block height
-        #[clap(long)]
-        start: Option<u64>,
-
-        /// block count, could be less than zero
-        #[clap(long)]
-        count: Option<i64>,
-    },
-}
-
-fn check_parallel_args(max_par: u64) {
-    if max_par > log_cpus() * 1000 {
-        panic!(
-            "Two much working thread, maybe overload the system {}/{}",
-            max_par,
-            log_cpus(),
-        )
-    }
-    if max_par == 0 {
-        panic!("Invalid parallel parameters: max {}", max_par);
-    }
-}
-
-fn calc_pool_size(keys: usize, max_par: usize) -> usize {
-    let mut max_pool_size = keys * 2;
-    if max_pool_size > max_par {
-        max_pool_size = max_par;
-    }
-    max_pool_size
-}
 
 fn eth_transaction(network: &str, timeout: Option<u64>, hash: H256) {
     let network = real_network(network);
@@ -369,7 +232,7 @@ fn fund_accounts(
 fn main() -> web3::Result<()> {
     env_logger::init();
 
-    let cli = Cli::parse();
+    let cli = Cli::parse_args();
     debug!("{:?}", cli);
     info!("logical cpus {}, physical cpus {}", log_cpus(), phy_cpus());
     let keep_metric = cli.keep_metric;
@@ -414,6 +277,15 @@ fn main() -> web3::Result<()> {
             count,
         }) => {
             eth_blocks(network.as_ref(), *timeout, *start, *count);
+            return Ok(());
+        }
+        Some(Commands::Etl {
+            abcid,
+            tendermint,
+            redis,
+            load,
+        }) => {
+            println!("{} {} {} {}", abcid, tendermint, redis, load);
             return Ok(());
         }
         None => {}

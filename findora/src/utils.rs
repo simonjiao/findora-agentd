@@ -51,3 +51,24 @@ where
 
     (root_sk, root_addr)
 }
+
+pub fn check_parallel_args(max_par: u64) {
+    if max_par > log_cpus() * 1000 {
+        panic!(
+            "Two much working thread, maybe overload the system {}/{}",
+            max_par,
+            log_cpus(),
+        )
+    }
+    if max_par == 0 {
+        panic!("Invalid parallel parameters: max {}", max_par);
+    }
+}
+
+pub fn calc_pool_size(keys: usize, max_par: usize) -> usize {
+    let mut max_pool_size = keys * 2;
+    if max_pool_size > max_par {
+        max_pool_size = max_par;
+    }
+    max_pool_size
+}
