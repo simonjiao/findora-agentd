@@ -285,7 +285,7 @@ fn main() -> web3::Result<()> {
             redis,
             load,
         }) => {
-            println!("{} {} {} {}", abcid, tendermint, redis, load);
+            let _ = Cli::etl_cmd(abcid, tendermint, redis.as_str(), *load);
             return Ok(());
         }
         None => {}
