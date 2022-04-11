@@ -1,4 +1,5 @@
 mod commands;
+mod db;
 
 use std::{
     cell::RefCell,

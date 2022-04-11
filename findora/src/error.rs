@@ -8,6 +8,8 @@ pub enum Error {
     SyncTx,
     SendErr,
     Io(std::io::Error),
+    Db(redis::RedisError),
+    NotSupport(String),
     Unknown,
 }
 
@@ -18,7 +20,9 @@ impl std::fmt::Display for Error {
             Error::SyncTx => write!(f, "tx not accepted by tendermint"),
             Error::SendErr => write!(f, "tx not sent"),
             Error::Io(e) => write!(f, "Io error {:?}", e),
-            Error::Unknown => write!(f, "an unknown error happens"),
+            Error::Db(e) => write!(f, "Database error {:?}", e),
+            Error::NotSupport(e) => write!(f, "Not support: {}", e),
+            Error::Unknown => write!(f, "a unknown error happens"),
         }
     }
 }
@@ -27,6 +31,7 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Error::Io(e) => Some(e),
+            Error::Db(e) => Some(e),
             _ => None,
         }
     }
@@ -35,5 +40,11 @@ impl std::error::Error for Error {
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Self::Io(e)
+    }
+}
+
+impl From<redis::RedisError> for Error {
+    fn from(e: redis::RedisError) -> Self {
+        Self::Db(e)
     }
 }

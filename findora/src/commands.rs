@@ -1,9 +1,10 @@
+use crate::db::{Db, Proto};
 use chrono::NaiveDateTime;
 use clap::{Parser, Subcommand};
 use feth::{error::Result, BLOCK_TIME};
-use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter};
+use serde::{Deserialize, Serialize};
 use std::{
+    fmt::{Display, Formatter},
     io::BufRead,
     path::{Path, PathBuf},
 };
@@ -45,7 +46,7 @@ pub(crate) struct Cli {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct BlockInfo {
     height: u64,
     timestamp: i64,
@@ -79,8 +80,12 @@ impl Cli {
     where
         P: AsRef<Path> + std::fmt::Debug,
     {
-        let mut blocks = BTreeMap::new();
         println!("{:?} {:?} {} {}", abcid, tendermint, redis, load);
+
+        let proto = if &redis[..4] == "unix" { Proto::Unix } else { Proto::Url };
+        let db = Db::new(Some(proto), None, redis, Some(6379), Some(0))?;
+        let mut min_height = u64::MAX;
+        let mut max_height = u64::MIN;
 
         let tm_log = std::fs::File::open(tendermint)?;
         for line in std::io::BufReader::new(tm_log).lines() {
@@ -114,7 +119,16 @@ impl Cli {
                         valid_txs: blk.2.unwrap(),
                         ..Default::default()
                     };
-                    blocks.insert(bi.height, std::cell::RefCell::new(bi));
+                    if min_height > bi.height {
+                        min_height = bi.height;
+                    }
+                    if max_height < bi.height {
+                        max_height = bi.height
+                    }
+                    let raw_data = serde_json::to_string(&bi).unwrap();
+                    db.insert(bi.height, raw_data.as_bytes())
+                        .expect("failed to insert a block info");
+                    //blocks.insert(bi.height, std::cell::RefCell::new(bi));
                 }
                 _ => {}
             }
@@ -132,9 +146,13 @@ impl Cli {
                         let height = words[words.len() - 2].split_whitespace().collect::<Vec<_>>()[1]
                             .parse::<u64>()
                             .unwrap();
-                        if let Some(bi) = blocks.get(&height) {
-                            bi.borrow_mut().snapshot = words[2].parse::<u64>().unwrap();
-                            bi.borrow_mut().begin = words[3].parse::<u64>().unwrap();
+                        if let Ok(raw_bi) = db.get(height) {
+                            let mut bi: BlockInfo = serde_json::from_str(raw_bi.as_str()).unwrap();
+                            bi.snapshot = words[2].parse::<u64>().unwrap();
+                            bi.begin = words[3].parse::<u64>().unwrap();
+                            let new_raw = serde_json::to_string(&bi).unwrap();
+                            db.insert(bi.height, new_raw.as_bytes())
+                                .expect("failed to update a block info");
                         }
                     }
                     Some("end of end_block") => {
@@ -142,8 +160,12 @@ impl Cli {
                         let height = words[words.len() - 2].split_whitespace().collect::<Vec<_>>()[1]
                             .parse::<u64>()
                             .unwrap();
-                        if let Some(bi) = blocks.get(&height) {
-                            bi.borrow_mut().end = words[2].parse::<u64>().unwrap();
+                        if let Ok(raw_bi) = db.get(height) {
+                            let mut bi: BlockInfo = serde_json::from_str(raw_bi.as_str()).unwrap();
+                            bi.end = words[2].parse::<u64>().unwrap();
+                            let new_raw = serde_json::to_string(&bi).unwrap();
+                            db.insert(bi.height, new_raw.as_bytes())
+                                .expect("failed to update a block info");
                         }
                     }
                     Some("end of commit") => {
@@ -151,27 +173,24 @@ impl Cli {
                         let height = words[words.len() - 2].split_whitespace().collect::<Vec<_>>()[1]
                             .parse::<u64>()
                             .unwrap();
-                        if let Some(bi) = blocks.get(&height) {
-                            bi.borrow_mut().commit_evm = words[3].parse::<u64>().unwrap();
-                            bi.borrow_mut().commit = words[4].parse::<u64>().unwrap();
+                        if let Ok(raw_bi) = db.get(height) {
+                            let mut bi: BlockInfo = serde_json::from_str(raw_bi.as_str()).unwrap();
+                            bi.commit_evm = words[3].parse::<u64>().unwrap();
+                            bi.commit = words[4].parse::<u64>().unwrap();
+                            let new_raw = serde_json::to_string(&bi).unwrap();
+                            db.insert(bi.height, new_raw.as_bytes())
+                                .expect("failed to update a block info");
                         }
                     }
                     _ => {}
                 }
             });
 
-        // update block time
-        blocks.iter().filter(|(&h, _)| h > 0).for_each(|(&h, bi)| {
-            if let Some(lbi) = blocks.get(&(h - 1)) {
-                bi.borrow_mut().block_time = if bi.borrow().timestamp >= lbi.borrow().timestamp {
-                    let time = bi.borrow().timestamp - lbi.borrow().timestamp;
-                    Some(time as u64)
-                } else {
-                    None
-                }
+        for h in min_height..=max_height {
+            if let Ok(bi) = db.get(h) {
+                println!("{}", serde_json::from_str::<BlockInfo>(bi.as_str()).unwrap());
             }
-            println!("{}", *bi.borrow());
-        });
+        }
         Ok(())
     }
 }
@@ -268,7 +287,7 @@ pub enum Commands {
         tendermint: String,
 
         /// redis db address
-        #[clap(long, default_value = "127.0.0.1:6379")]
+        #[clap(long, default_value = "127.0.0.1")]
         redis: String,
 
         /// load data
