@@ -1,6 +1,6 @@
 [workspace]
 members = [
-"findora",
+    "findora",
 ]
 
 [profile.release]

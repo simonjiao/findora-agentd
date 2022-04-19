@@ -1,6 +1,7 @@
 pub mod error;
 pub mod utils;
 
+use crate::error::InternalError;
 use crate::{
     error::{Error, Result},
     utils::extract_keypair_from_file,
@@ -260,11 +261,17 @@ impl TestClient {
                     Error::CheckTx
                 } else if err_str.contains("error sending request") {
                     Error::SendErr
+                } else if err_str.contains("InternalError") {
+                    if err_str.contains("InvalidNonce,") {
+                        Error::TxInternalErr(InternalError::InvalidNonce(err_str))
+                    } else {
+                        Error::TxInternalErr(InternalError::Other(err_str))
+                    }
                 } else {
-                    Error::Unknown
+                    Error::Unknown(err_str)
                 }
             }
-            None => Error::Unknown,
+            None => Error::Unknown("empty error".to_string()),
         }
     }
 
@@ -350,8 +357,11 @@ impl TestClient {
                                     Error::CheckTx => {
                                         error!("Transaction check error");
                                     }
+                                    Error::TxInternalErr(e) => {
+                                        error!("Internal error: {:?}", e);
+                                    }
                                     _ => {
-                                        error!("unknown error");
+                                        error!("other error {:?}", e);
                                     }
                                 }
                                 let mut skip = false;
