@@ -374,6 +374,7 @@ fn main() -> web3::Result<()> {
     // fix one source key to one endpoint
 
     debug!("starting tests...");
+    let start_height = client.block_number().unwrap();
     let total = source_keys.len() * count as usize;
     let now = std::time::Instant::now();
     let metrics = source_keys
@@ -398,6 +399,7 @@ fn main() -> web3::Result<()> {
         .collect::<Vec<_>>();
 
     let elapsed = now.elapsed().as_secs();
+    let end_height = client.block_number().unwrap();
 
     if keep_metric {
         info!("saving test files");
@@ -412,8 +414,8 @@ fn main() -> web3::Result<()> {
 
     let avg = total as f64 / elapsed as f64;
     info!(
-        "Performed {} transfers, max concurrences {}, {:.3} Transfer/s, total {} seconds",
-        total, concurrences, avg, elapsed,
+        "Test result summary: total,{},concurrency,{},TPS,{:.3},seconds,{},height,{},{}",
+        total, concurrences, avg, elapsed, start_height, end_height,
     );
 
     Ok(())

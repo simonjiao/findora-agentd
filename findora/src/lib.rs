@@ -262,7 +262,7 @@ impl TestClient {
                 } else if err_str.contains("error sending request") {
                     Error::SendErr
                 } else if err_str.contains("InternalError") {
-                    if err_str.contains("InvalidNonce,") {
+                    if err_str.contains("InvalidNonce") {
                         Error::TxInternalErr(InternalError::InvalidNonce(err_str))
                     } else {
                         Error::TxInternalErr(InternalError::Other(err_str))
