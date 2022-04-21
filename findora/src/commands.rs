@@ -209,14 +209,25 @@ impl Cli {
         for h in min_height..=max_height {
             if let Ok(bi) = db.get(h) {
                 let bi = serde_json::from_str::<BlockInfo>(bi.as_str()).unwrap();
-                println!(
-                    "{},{},{},{},{}",
-                    bi.height,
-                    bi.txs,
-                    bi.valid_txs,
-                    bi.block_time.unwrap_or_default(),
-                    bi.block_time.map(|t| bi.txs as f64 / t as f64).unwrap_or_default()
-                );
+                let last_bi = {
+                    if h == 0 {
+                        None
+                    } else if let Ok(bi) = db.get(h - 1) {
+                        serde_json::from_str::<BlockInfo>(bi.as_str()).ok()
+                    } else {
+                        None
+                    }
+                };
+
+                let (block_time, tps) = match last_bi {
+                    Some(last) if bi.timestamp > last.timestamp => {
+                        let time = bi.timestamp - last.timestamp;
+                        let tps = bi.txs as f64 / time as f64;
+                        (time, tps)
+                    }
+                    _ => (0i64, 0f64),
+                };
+                println!("{},{},{},{},{:.3}", bi.height, bi.txs, bi.valid_txs, block_time, tps,);
             }
         }
         Ok(())
