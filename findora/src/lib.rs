@@ -109,7 +109,7 @@ impl TestClient {
             .build()
             .unwrap();
         let url = Url::parse(url.as_deref().unwrap_or(WEB3_SRV)).unwrap();
-        let transport = web3::transports::Http::with_client(client, url);
+        let transport = Http::with_client(client, url);
         let web3 = Arc::new(web3::Web3::new(transport));
         let eth = Arc::new(web3.eth());
         let accounts = Arc::new(web3.accounts());

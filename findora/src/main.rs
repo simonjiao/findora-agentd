@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod profiler;
 
 use std::{
     cell::RefCell,
@@ -287,6 +288,10 @@ fn main() -> web3::Result<()> {
             load,
         }) => {
             let _ = Cli::etl_cmd(abcid, tendermint, redis.as_str(), *load);
+            return Ok(());
+        }
+        Some(Commands::Profiler { network, enable })=> {
+            let _ = Cli::profiler(network.as_str() ,*enable);
             return Ok(());
         }
         None => {}

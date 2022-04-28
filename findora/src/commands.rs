@@ -1,4 +1,7 @@
-use crate::db::{Db, Proto};
+use crate::{
+    db::{Db, Proto},
+    profiler,
+};
 use chrono::NaiveDateTime;
 use clap::{Parser, Subcommand};
 use feth::{error::Result, BLOCK_TIME};
@@ -232,6 +235,11 @@ impl Cli {
         }
         Ok(())
     }
+
+    pub(crate) fn profiler(network: &str, enabled: bool) -> Result<()> {
+        let url = format!("{}/configuration", network);
+        profiler::set_profiler(url.as_str(), enabled)
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -332,5 +340,16 @@ pub enum Commands {
         /// load data
         #[clap(long)]
         load: bool,
+    },
+
+    /// Profiler operations
+    Profiler {
+        ///  Findora submission server endpoint
+        #[clap(long)]
+        network: String,
+
+        /// Profiler switch
+        #[clap(long)]
+        enable: bool,
     },
 }
