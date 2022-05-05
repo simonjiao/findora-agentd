@@ -45,6 +45,10 @@ pub(crate) struct Cli {
     #[clap(long)]
     pub(crate) keep_metric: bool,
 
+    /// if need to retry to sending transactions
+    #[clap(long)]
+    pub(crate) need_retry: bool,
+
     #[clap(subcommand)]
     pub(crate) command: Option<Commands>,
 }

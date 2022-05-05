@@ -2,8 +2,9 @@
 
 set -e
 
-endpoint00="http://dev-qa01-us-west-2-full-000-open.dev.findora.org:8545"
+#endpoint00="http://dev-qa01-us-west-2-full-000-open.dev.findora.org:8545"
 endpoint01="http://dev-qa01-us-west-2-full-001-open.dev.findora.org:8545"
+#submission="https://dev-qa01.dev.findora.org:8669"
 
 #cd "$script_dir"/..
 
@@ -30,20 +31,20 @@ switch_profiler() {
     logfile=$3
 
     if [ "$enable" ]; then
-        RUST_LOG=info ./feth profiler --network "$endpoint" --enable 2>&1 >>"$logfile"
+        { RUST_LOG=info ./feth profiler --network "$endpoint" --enable >> "$logfile"; } 2>&1
     else
-        RUST_LOG=info ./feth profiler --network "$endpoint" 2>&1 >>"$logfile"
+        { RUST_LOG=info ./feth profiler --network "$endpoint" >>"$logfile"; } 2>&1
     fi
 
 }
 
-switch_profiler "$endpoint01" true "test01.log"
+#switch_profiler "$endpoint01" true "test01.log"
 
 for ((i = 0; i < 10000; i++)); do
     run_one_test "$endpoint01" 1 200 100 5 "source_keys.001" "test01.log"
 done
 
-switch_profiler "$endpoint01" false "test01.log"
+#switch_profiler "$endpoint01" false "test01.log"
 
 #for ((i = 0; i < 10000; i++)); do
 #    run_one_test "$endpoint01" 1 300 100 1 "source_keys.002" "test02.log"

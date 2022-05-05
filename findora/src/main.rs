@@ -224,7 +224,7 @@ fn fund_accounts(
         .collect::<Vec<_>>();
     // 1000 eth
     let _metrics = client
-        .distribution(1, None, &source_accounts, &Some(block_time), true)
+        .distribution(1, None, &source_accounts, &Some(block_time), true, true)
         .unwrap();
     // save metrics to file
     //let data = serde_json::to_string(&metrics).unwrap();
@@ -290,8 +290,8 @@ fn main() -> web3::Result<()> {
             let _ = Cli::etl_cmd(abcid, tendermint, redis.as_str(), *load);
             return Ok(());
         }
-        Some(Commands::Profiler { network, enable })=> {
-            let _ = Cli::profiler(network.as_str() ,*enable);
+        Some(Commands::Profiler { network, enable }) => {
+            let _ = Cli::profiler(network.as_str(), *enable);
             return Ok(());
         }
         None => {}
@@ -301,6 +301,7 @@ fn main() -> web3::Result<()> {
     let max_par = cli.max_parallelism;
     let timeout = cli.timeout;
     let source_file = cli.source;
+    let need_retry = cli.need_retry;
     let block_time = Some(cli.block_time);
     let source_keys: Vec<KeyPair> =
         serde_json::from_str(std::fs::read_to_string(source_file).unwrap().as_str()).unwrap();
@@ -393,7 +394,7 @@ fn main() -> web3::Result<()> {
                 .enumerate()
                 .map(|(i, (source, targets))| {
                     let metrics = client
-                        .distribution(i + 1, Some(*source), targets, &block_time, false)
+                        .distribution(i + 1, Some(*source), targets, &block_time, false, need_retry)
                         .unwrap();
                     let mut num = total_succeed.lock().unwrap();
                     *num += metrics.succeed;

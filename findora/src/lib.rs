@@ -282,6 +282,7 @@ impl TestClient {
         targets: &[(Address, U256)],
         block_time: &Option<u64>,
         need_wait: bool,
+        need_retry: bool,
     ) -> Result<TransferMetrics> {
         let mut results = vec![];
         let mut succeed = 0u64;
@@ -401,7 +402,7 @@ impl TestClient {
                                     }
                                     std::thread::sleep(Duration::from_secs(3));
                                 }
-                                if !skip {
+                                if need_retry && !skip {
                                     error!("retry for error {:?}", e);
                                     metric.status = 97;
                                     let wait_time = 2u64;
