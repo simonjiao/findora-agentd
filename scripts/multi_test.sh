@@ -25,8 +25,9 @@ run_one_test() {
 }
 
 switch_profiler() {
-    enable=$1
-    logfile=$2
+    endpoint=$1
+    enable=$2
+    logfile=$3
 
     if [ "$enable" ]; then
         RUST_LOG=info ./feth profiler --network "$endpoint" --enable 2>&1 >>"$logfile"
@@ -36,13 +37,13 @@ switch_profiler() {
 
 }
 
-switch_profiler true "test01.log"
+switch_profiler "$endpoint01" true "test01.log"
 
 for ((i = 0; i < 10000; i++)); do
     run_one_test "$endpoint01" 1 200 100 5 "source_keys.001" "test01.log"
 done
 
-switch_profiler false "test01.log"
+switch_profiler "$endpoint01" false "test01.log"
 
 #for ((i = 0; i < 10000; i++)); do
 #    run_one_test "$endpoint01" 1 300 100 1 "source_keys.002" "test02.log"
