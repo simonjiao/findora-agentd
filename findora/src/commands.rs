@@ -73,12 +73,12 @@ impl std::str::FromStr for Network {
                 }
                 return if let Some(cluster) = segs.get(1).and_then(|&num| num.parse::<u32>().ok()) {
                     segs.get(2).map_or(
-                        Ok(Self::Qa(format!("https://dev-qa{:2}.dev.findora.org:8545", cluster))),
+                        Ok(Self::Qa(format!("https://dev-qa{:0>2}.dev.findora.org:8545", cluster))),
                         |&num| {
                             num.parse::<u32>()
                                 .map_or(Err("Node num should be a 32-bit integer".to_owned()), |node| {
                                     Ok(Self::Qa(format!(
-                                        "http://dev-qa{:2}-us-west-2-full-{:3}-open.dev.findora.org:8545",
+                                        "http://dev-qa{:0>2}-us-west-2-full-{:0>3}-open.dev.findora.org:8545",
                                         cluster, node
                                     )))
                                 })
@@ -95,13 +95,6 @@ impl std::str::FromStr for Network {
         }
     }
 }
-
-//"anvil" => vec![Some("
-//"main" => vec![Some("
-//"mock" => vec![Some("https://dev-mainnetmock.dev.findora.org:8545".to_string())],
-//"test" => vec![Some(
-//"qa01" => vec![Some("h1ttps://dev-qa01.dev.findora.org:8545".to_string())],
-//"qa02" => vec![Some("https://dev-qa02.dev.findora.org:8545".to_string())],
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about=None)]
@@ -447,10 +440,6 @@ pub enum Commands {
         /// http request timeout, seconds
         #[clap(long)]
         timeout: Option<u64>,
-
-        /// save metric file or not
-        #[clap(long)]
-        keep_metric: bool,
 
         /// if need to retry to sending transactions
         #[clap(long)]

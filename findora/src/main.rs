@@ -302,7 +302,6 @@ fn main() -> web3::Result<()> {
             source,
             block_time,
             timeout,
-            keep_metric: _,
             need_retry,
         }) => {
             let max_par = *max_parallelism;
@@ -327,7 +326,6 @@ fn main() -> web3::Result<()> {
 
             let url = network.get_url().to_owned();
             let client = Arc::new(TestClient::setup(Some(url), timeout));
-            let clients = vec![client.clone()];
 
             info!("chain_id:     {}", client.chain_id().unwrap());
             info!("gas_price:    {}", client.gas_price().unwrap());
@@ -372,39 +370,21 @@ fn main() -> web3::Result<()> {
                 source_keys.len()
             };
 
-            // split the source keys
-            let mut chunk_size = source_keys.len() / clients.len();
-            if source_keys.len() % clients.len() != 0 {
-                chunk_size += 1;
-            }
-
             // one-thread per source key
-            // fix one source key to one endpoint
-
             debug!("starting tests...");
             let start_height = client.block_number().unwrap();
             let total = source_keys.len() * count as usize;
             let now = std::time::Instant::now();
-            let _ = source_keys
-                .par_chunks(chunk_size)
-                .zip(clients)
+            source_keys
                 .into_par_iter()
                 .enumerate()
-                .map(|(chunk, (sources, client))| {
-                    sources
-                        .into_par_iter()
-                        .enumerate()
-                        .map(|(i, (source, targets))| {
-                            let metrics = client
-                                .distribution(i + 1, Some(*source), targets, &block_time, false, need_retry)
-                                .unwrap();
-                            let mut num = total_succeed.lock().unwrap();
-                            *num += metrics.succeed;
-                            (chunk, i, metrics)
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
+                .for_each(|(i, (source, targets))| {
+                    let metrics = client
+                        .distribution(i + 1, Some(source), &targets, &block_time, false, need_retry)
+                        .unwrap();
+                    let mut num = total_succeed.lock().unwrap();
+                    *num += metrics.succeed;
+                });
 
             let elapsed = now.elapsed().as_secs();
             let end_height = client.block_number().unwrap();
