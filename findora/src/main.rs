@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod profiler;
 
+use std::time::Duration;
 use std::{
     cell::RefCell,
     cmp::Ordering,
@@ -296,7 +297,7 @@ fn main() -> web3::Result<()> {
         Some(Commands::Test {
             network,
             mode: _,
-            delay: _,
+            delay,
             max_parallelism,
             count,
             source,
@@ -307,7 +308,7 @@ fn main() -> web3::Result<()> {
             let max_par = *max_parallelism;
             let source_file = source;
             let block_time = Some(*block_time);
-            let timeout = *timeout;
+            let timeout = Some(*timeout);
             let count = *count;
             let need_retry = *need_retry;
 
@@ -375,16 +376,21 @@ fn main() -> web3::Result<()> {
             let start_height = client.block_number().unwrap();
             let total = source_keys.len() * count as usize;
             let now = std::time::Instant::now();
-            source_keys
-                .into_par_iter()
-                .enumerate()
-                .for_each(|(i, (source, targets))| {
+            for r in 0..count {
+                let now = std::time::Instant::now();
+                source_keys.par_iter().enumerate().for_each(|(i, (source, targets))| {
+                    let targets = vec![*targets.get(r as usize).unwrap()];
                     let metrics = client
-                        .distribution(i + 1, Some(source), &targets, &block_time, false, need_retry)
+                        .distribution(i + 1, Some(*source), &targets, &block_time, false, need_retry)
                         .unwrap();
                     let mut num = total_succeed.lock().unwrap();
                     *num += metrics.succeed;
                 });
+                let elapsed = now.elapsed().as_secs();
+                info!("round {}/{} time {}", r + 1, count, elapsed);
+
+                std::thread::sleep(Duration::from_secs(*delay));
+            }
 
             let elapsed = now.elapsed().as_secs();
             let end_height = client.block_number().unwrap();

@@ -419,13 +419,13 @@ pub enum Commands {
 
         /// Delay time for next batch of transactions
         #[clap(long, default_value_t = 15)]
-        delay: u32,
+        delay: u64,
 
         /// The maximum parallelism
         #[clap(long, default_value_t = 200)]
         max_parallelism: u64,
 
-        /// The count of transactions sent by a routine
+        /// The count of transactions sent by a source key
         #[clap(long, default_value_t = 0)]
         count: u64,
 
@@ -438,8 +438,8 @@ pub enum Commands {
         block_time: u64,
 
         /// http request timeout, seconds
-        #[clap(long)]
-        timeout: Option<u64>,
+        #[clap(long, default_value_t = 60)]
+        timeout: u64,
 
         /// if need to retry to sending transactions
         #[clap(long)]
