@@ -14,41 +14,98 @@ use std::{
 };
 use web3::types::{Address, H256};
 
+#[derive(Debug)]
+pub enum TestMode {
+    Basic,
+    Contract,
+}
+
+impl std::str::FromStr for TestMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "basic" => Ok(Self::Basic),
+            "contract" => Ok(Self::Contract),
+            _ => Err("Invalid mode: basic and contract are supported".to_owned()),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum Network {
+    Local(String), //Local(u32)
+    Anvil(String), //Anvil,
+    Main(String),  //Main
+    Test(String),  // Test(String)
+    Qa(String),    //QA((u32,u32,u32))
+}
+
+impl Network {
+    pub fn get_url(&self) -> &str {
+        match self {
+            Network::Local(url) => url.as_str(),
+            Network::Anvil(url) => url.as_str(),
+            Network::Main(url) => url.as_str(),
+            Network::Test(url) => url.as_str(),
+            Network::Qa(url) => url.as_str(),
+        }
+    }
+}
+
+impl std::str::FromStr for Network {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        match s.to_owned().as_str() {
+            "local" => Ok(Self::Local("http://localhost:8545".to_string())),
+            "anvil" => Ok(Self::Anvil("https://prod-testnet.prod.findora.org:8545".to_string())),
+            "main" => Ok(Self::Main("https://prod-mainnet.prod.findora.org:8545".to_string())),
+            "test" => Ok(Self::Test("http://34.211.109.216:8545".to_string())),
+            network if network.starts_with("qa") => {
+                // --network qa,01,02
+                let segs: Vec<&str> = network.splitn(3, ',').collect();
+                if segs.len() < 2 {
+                    return Err("Please provide a cluster num at least".to_owned());
+                }
+                if segs.get(0) != Some(&"qa") {
+                    return Err("Just for qa environment".to_owned());
+                }
+                return if let Some(cluster) = segs.get(1).and_then(|&num| num.parse::<u32>().ok()) {
+                    segs.get(2).map_or(
+                        Ok(Self::Qa(format!("https://dev-qa{:2}.dev.findora.org:8545", cluster))),
+                        |&num| {
+                            num.parse::<u32>()
+                                .map_or(Err("Node num should be a 32-bit integer".to_owned()), |node| {
+                                    Ok(Self::Qa(format!(
+                                        "http://dev-qa{:2}-us-west-2-full-{:3}-open.dev.findora.org:8545",
+                                        cluster, node
+                                    )))
+                                })
+                        },
+                    )
+                } else {
+                    Err("QA env num is a 32-bit integer".to_owned())
+                };
+            }
+            network if network.starts_with("node") => {
+                todo!()
+            }
+            _ => Err("Invalid network".to_owned()),
+        }
+    }
+}
+
+//"anvil" => vec![Some("
+//"main" => vec![Some("
+//"mock" => vec![Some("https://dev-mainnetmock.dev.findora.org:8545".to_string())],
+//"test" => vec![Some(
+//"qa01" => vec![Some("h1ttps://dev-qa01.dev.findora.org:8545".to_string())],
+//"qa02" => vec![Some("https://dev-qa02.dev.findora.org:8545".to_string())],
+
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about=None)]
 pub(crate) struct Cli {
-    /// The maximum parallelism
-    #[clap(long, default_value_t = 200)]
-    pub(crate) max_parallelism: u64,
-
-    /// The count of transactions sent by a routine
-    #[clap(long, default_value_t = 0)]
-    pub(crate) count: u64,
-
-    /// the source account file
-    #[clap(long, parse(from_os_str), value_name = "FILE", default_value = "source_keys.001")]
-    pub(crate) source: PathBuf,
-
-    /// block time of the network
-    #[clap(long, default_value_t = BLOCK_TIME)]
-    pub(crate) block_time: u64,
-
-    /// findora network full-node urls: http://node0:8545,http://node1:8545
-    #[clap(long)]
-    pub(crate) network: Option<String>,
-
-    /// http request timeout, seconds
-    #[clap(long)]
-    pub(crate) timeout: Option<u64>,
-
-    /// save metric file or not
-    #[clap(long)]
-    pub(crate) keep_metric: bool,
-
-    /// if need to retry to sending transactions
-    #[clap(long)]
-    pub(crate) need_retry: bool,
-
     #[clap(subcommand)]
     pub(crate) command: Option<Commands>,
 }
@@ -355,5 +412,48 @@ pub enum Commands {
         /// Profiler switch
         #[clap(long)]
         enable: bool,
+    },
+
+    /// Test
+    Test {
+        /// Ethereum web3-compatible network
+        #[clap(long)]
+        network: Network,
+
+        /// Test mode: basic transfer transaction, contract call transaction
+        #[clap(long)]
+        mode: TestMode,
+
+        /// Delay time for next batch of transactions
+        #[clap(long, default_value_t = 15)]
+        delay: u32,
+
+        /// The maximum parallelism
+        #[clap(long, default_value_t = 200)]
+        max_parallelism: u64,
+
+        /// The count of transactions sent by a routine
+        #[clap(long, default_value_t = 0)]
+        count: u64,
+
+        /// the source account file
+        #[clap(long, parse(from_os_str), value_name = "FILE", default_value = "source_keys.001")]
+        source: PathBuf,
+
+        /// block time of the network
+        #[clap(long, default_value_t = BLOCK_TIME)]
+        block_time: u64,
+
+        /// http request timeout, seconds
+        #[clap(long)]
+        timeout: Option<u64>,
+
+        /// save metric file or not
+        #[clap(long)]
+        keep_metric: bool,
+
+        /// if need to retry to sending transactions
+        #[clap(long)]
+        need_retry: bool,
     },
 }
