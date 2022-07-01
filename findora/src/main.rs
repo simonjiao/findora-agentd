@@ -2,13 +2,13 @@ mod commands;
 mod db;
 mod profiler;
 
-use std::time::Duration;
 use std::{
     cell::RefCell,
     cmp::Ordering,
     ops::{Mul, MulAssign, Sub},
     str::FromStr,
-    sync::{mpsc, Arc, Mutex},
+    sync::{atomic::AtomicU64, atomic::Ordering::Relaxed, mpsc, Arc},
+    time::Duration,
 };
 
 use commands::*;
@@ -364,7 +364,7 @@ fn main() -> web3::Result<()> {
                 return Ok(());
             }
 
-            let total_succeed = Arc::new(Mutex::new(0u64));
+            let total_succeed = Arc::new(AtomicU64::new(0));
             let concurrences = if source_keys.len() > max_pool_size {
                 max_pool_size
             } else {
@@ -372,7 +372,7 @@ fn main() -> web3::Result<()> {
             };
 
             // one-thread per source key
-            debug!("starting tests...");
+            info!("starting tests...");
             let start_height = client.block_number().unwrap();
             let total = source_keys.len() * count as usize;
             let now = std::time::Instant::now();
@@ -383,12 +383,10 @@ fn main() -> web3::Result<()> {
                     let metrics = client
                         .distribution(i + 1, Some(*source), &targets, &block_time, false, need_retry)
                         .unwrap();
-                    let mut num = total_succeed.lock().unwrap();
-                    *num += metrics.succeed;
+                    total_succeed.fetch_add(metrics.succeed, Relaxed);
                 });
                 let elapsed = now.elapsed().as_secs();
                 info!("round {}/{} time {}", r + 1, count, elapsed);
-
                 std::thread::sleep(Duration::from_secs(*delay));
             }
 
