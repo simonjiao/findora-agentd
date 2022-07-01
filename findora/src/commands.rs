@@ -444,5 +444,9 @@ pub enum Commands {
         /// if need to retry to sending transactions
         #[clap(long)]
         need_retry: bool,
+
+        /// If need to check balance of source keys
+        #[clap(long)]
+        check_balance: bool,
     },
 }

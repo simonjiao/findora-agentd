@@ -304,6 +304,7 @@ fn main() -> web3::Result<()> {
             block_time,
             timeout,
             need_retry,
+            check_balance,
         }) => {
             let max_par = *max_parallelism;
             let source_file = source;
@@ -341,7 +342,11 @@ fn main() -> web3::Result<()> {
                         secp256k1::SecretKey::from_str(kp.private.as_str()).unwrap(),
                         Address::from_str(kp.address.as_str()).unwrap(),
                     );
-                    let balance = client.balance(address, None);
+                    let balance = if *check_balance {
+                        client.balance(address, None)
+                    } else {
+                        U256::MAX
+                    };
                     if balance <= target_amount.mul(count) {
                         None
                     } else {
@@ -364,7 +369,7 @@ fn main() -> web3::Result<()> {
                 return Ok(());
             }
 
-            let total_succeed = Arc::new(AtomicU64::new(0));
+            let total_succeed = AtomicU64::new(0);
             let concurrences = if source_keys.len() > max_pool_size {
                 max_pool_size
             } else {
