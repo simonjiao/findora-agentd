@@ -34,21 +34,35 @@ impl std::str::FromStr for TestMode {
 
 #[derive(Debug)]
 pub enum Network {
-    Local(String), //Local(u32)
-    Anvil(String), //Anvil,
-    Main(String),  //Main
-    Test(String),  // Test(String)
-    Qa(String),    //QA((u32,u32,u32))
+    Local,
+    Anvil,
+    Main,
+    Test,
+    Qa(u32, Option<u32>),
 }
 
+const LOCAL_URL: &str = "http://localhost:8545";
+const ANVIL_URL: &str = "https://prod-testnet.prod.findora.org:8545";
+const MAIN_URL: &str = "https://prod-mainnet.prod.findora.org:8545";
+const MY_TEST_URL: &str = "http://34.211.109.216:8545";
+
 impl Network {
-    pub fn get_url(&self) -> &str {
+    pub fn get_url(&self) -> String {
         match self {
-            Network::Local(url) => url.as_str(),
-            Network::Anvil(url) => url.as_str(),
-            Network::Main(url) => url.as_str(),
-            Network::Test(url) => url.as_str(),
-            Network::Qa(url) => url.as_str(),
+            Network::Local => LOCAL_URL.to_owned(),
+            Network::Anvil => ANVIL_URL.to_owned(),
+            Network::Main => MAIN_URL.to_owned(),
+            Network::Test => MY_TEST_URL.to_owned(),
+            Network::Qa(cluster, node) => {
+                if let Some(node) = node {
+                    format!(
+                        "http://dev-qa{:0>2}-us-west-2-full-{:0>3}-open.dev.findora.org:8545",
+                        cluster, node
+                    )
+                } else {
+                    format!("https://dev-qa{:0>2}.dev.findora.org:8545", cluster)
+                }
+            }
         }
     }
 }
@@ -58,10 +72,10 @@ impl std::str::FromStr for Network {
 
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
         match s.to_owned().as_str() {
-            "local" => Ok(Self::Local("http://localhost:8545".to_string())),
-            "anvil" => Ok(Self::Anvil("https://prod-testnet.prod.findora.org:8545".to_string())),
-            "main" => Ok(Self::Main("https://prod-mainnet.prod.findora.org:8545".to_string())),
-            "test" => Ok(Self::Test("http://34.211.109.216:8545".to_string())),
+            "local" => Ok(Self::Local),
+            "anvil" => Ok(Self::Anvil),
+            "main" => Ok(Self::Main),
+            "test" => Ok(Self::Test),
             network if network.starts_with("qa") => {
                 // --network qa,01,02
                 let segs: Vec<&str> = network.splitn(3, ',').collect();
@@ -73,14 +87,12 @@ impl std::str::FromStr for Network {
                 }
                 return if let Some(cluster) = segs.get(1).and_then(|&num| num.parse::<u32>().ok()) {
                     segs.get(2).map_or(
-                        Ok(Self::Qa(format!("https://dev-qa{:0>2}.dev.findora.org:8545", cluster))),
+                        //Ok(Self::Qa(format!("https://dev-qa{:0>2}.dev.findora.org:8545", cluster))),
+                        Ok(Self::Qa(cluster, None)),
                         |&num| {
                             num.parse::<u32>()
                                 .map_or(Err("Node num should be a 32-bit integer".to_owned()), |node| {
-                                    Ok(Self::Qa(format!(
-                                        "http://dev-qa{:0>2}-us-west-2-full-{:0>3}-open.dev.findora.org:8545",
-                                        cluster, node
-                                    )))
+                                    Ok(Self::Qa(cluster, Some(node)))
                                 })
                         },
                     )

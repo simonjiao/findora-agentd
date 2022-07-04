@@ -91,6 +91,7 @@ pub struct TestClient {
     pub root_sk: secp256k1::SecretKey,
     pub root_addr: Address,
     pub overflow_flag: AtomicUsize,
+    pub transport: Http,
     rt: Runtime,
 }
 
@@ -110,7 +111,7 @@ impl TestClient {
             .unwrap();
         let url = Url::parse(url.as_deref().unwrap_or(WEB3_SRV)).unwrap();
         let transport = Http::with_client(client, url);
-        let web3 = Arc::new(web3::Web3::new(transport));
+        let web3 = Arc::new(web3::Web3::new(transport.clone()));
         let eth = Arc::new(web3.eth());
         let accounts = Arc::new(web3.accounts());
         let (root_sk, root_addr) = extract_keypair_from_file(".secret");
@@ -125,6 +126,7 @@ impl TestClient {
             accounts,
             root_sk,
             root_addr,
+            transport,
             rt,
             overflow_flag: AtomicUsize::from(0),
         }
@@ -275,6 +277,7 @@ impl TestClient {
         }
     }
 
+    #[allow(dead_code)]
     pub fn distribution(
         &self,
         id: usize,

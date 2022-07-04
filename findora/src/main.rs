@@ -7,15 +7,14 @@ use std::{
     cmp::Ordering,
     ops::{Mul, MulAssign, Sub},
     str::FromStr,
-    sync::{atomic::AtomicU64, atomic::Ordering::Relaxed, mpsc, Arc},
+    sync::{mpsc, Arc},
     time::Duration,
 };
 
 use commands::*;
 use feth::{one_eth_key, utils::*, KeyPair, TestClient};
 use log::{debug, error, info};
-use rayon::prelude::*;
-use web3::types::{Address, Block, BlockId, BlockNumber, TransactionId, H256, U256, U64};
+use web3::types::{Address, Block, BlockId, BlockNumber, TransactionId, H256, U256, U64, TransactionParameters};
 
 fn eth_transaction(network: &str, timeout: Option<u64>, hash: H256) {
     let network = real_network(network);
@@ -304,14 +303,14 @@ fn main() -> web3::Result<()> {
             block_time,
             timeout,
             need_retry,
-            check_balance,
+            check_balance:_,
         }) => {
             let max_par = *max_parallelism;
             let source_file = source;
-            let block_time = Some(*block_time);
-            let timeout = Some(*timeout);
+            let _block_time = Some(*block_time);
+            let _timeout = Some(*timeout);
             let count = *count;
-            let need_retry = *need_retry;
+            let _need_retry = *need_retry;
 
             let source_keys: Vec<KeyPair> =
                 serde_json::from_str(std::fs::read_to_string(source_file).unwrap().as_str()).unwrap();
@@ -326,30 +325,56 @@ fn main() -> web3::Result<()> {
                 .unwrap();
             info!("thread pool size {}", max_pool_size);
 
-            let url = network.get_url().to_owned();
-            let client = Arc::new(TestClient::setup(Some(url), timeout));
+            let url = network.get_url();
+            let http = web3::transports::Http::new(url.as_str())?;
+            let client = web3::Web3::new(web3::transports::Batch::new(http));
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let accounts = client.accounts();
 
-            info!("chain_id:     {}", client.chain_id().unwrap());
-            info!("gas_price:    {}", client.gas_price().unwrap());
-            info!("block_number: {}", client.block_number().unwrap());
-            info!("frc20 code:   {:?}", client.frc20_code().unwrap());
+            let block = client.eth().block_number();
+            let chain_id = client.eth().chain_id();
+            let gas_price = client.eth().gas_price();
+
+            let (block_number, chain_id, gas_price) = rt.block_on(async {
+                let _ = client.transport().submit_batch().await.unwrap();
+                (block.await.unwrap(), chain_id.await.unwrap(), gas_price.await.unwrap())
+            });
+            info!("block_number: {:?}", block_number);
+            info!("chain_id: {:?}", chain_id);
+            info!("gas_price: {:?}", gas_price);
+
+            if count == 0 {
+                error!("zero target accounts, skipped.");
+                return Ok(());
+            }
 
             info!("preparing test data...");
+            let sources = source_keys.into_iter().map(|kp| {
+                let (secret, address) = (
+                    secp256k1::SecretKey::from_str(kp.private.as_str()).unwrap(),
+                    Address::from_str(kp.address.as_str()).unwrap(),
+                );
+                (secret, address, client.eth().balance(address, None))
+            }).collect::<Vec<_>>();
+
+            let source_keys = rt.block_on(async {
+                let _ = client.transport().submit_batch().await;
+                let mut filtered = Vec::<_>::with_capacity(sources.len());
+                for (secret, address, balance) in sources.into_iter() {
+                    match balance.await {
+                        Ok(balance) if balance > target_amount.mul(count) => filtered.push(secret),
+                        _ => debug!("filter out source key {:?}", address),
+                    }
+                }
+                filtered
+            });
+
             let source_keys = source_keys
-                .par_iter()
-                .filter_map(|kp| {
-                    let (secret, address) = (
-                        secp256k1::SecretKey::from_str(kp.private.as_str()).unwrap(),
-                        Address::from_str(kp.address.as_str()).unwrap(),
-                    );
-                    let balance = if *check_balance {
-                        client.balance(address, None)
-                    } else {
-                        U256::MAX
-                    };
-                    if balance <= target_amount.mul(count) {
-                        None
-                    } else {
+                .into_iter()
+                .map(|secret| {
                         let target = (0..count)
                             .map(|_| {
                                 (
@@ -358,18 +383,16 @@ fn main() -> web3::Result<()> {
                                 )
                             })
                             .collect::<Vec<_>>();
-                        debug!("account {:?} added to source pool", address);
-                        Some(((secret, address), target))
+                        (secret, target)
                     }
-                })
+                )
                 .collect::<Vec<_>>();
 
-            if count == 0 || source_keys.is_empty() {
-                error!("Not enough sufficient source accounts or target accounts, skipped.");
+            if source_keys.is_empty() {
+                error!("Not enough sufficient source accounts, skipped.");
                 return Ok(());
             }
 
-            let total_succeed = AtomicU64::new(0);
             let concurrences = if source_keys.len() > max_pool_size {
                 max_pool_size
             } else {
@@ -378,25 +401,40 @@ fn main() -> web3::Result<()> {
 
             // one-thread per source key
             info!("starting tests...");
-            let start_height = client.block_number().unwrap();
+            let start_height = block_number;
             let total = source_keys.len() * count as usize;
             let now = std::time::Instant::now();
             for r in 0..count {
                 let now = std::time::Instant::now();
-                source_keys.par_iter().enumerate().for_each(|(i, (source, targets))| {
-                    let targets = vec![*targets.get(r as usize).unwrap()];
-                    let metrics = client
-                        .distribution(i + 1, Some(*source), &targets, &block_time, false, need_retry)
-                        .unwrap();
-                    total_succeed.fetch_add(metrics.succeed, Relaxed);
+                let mut signed_txns = Vec::<_>::with_capacity(source_keys.len());
+                for (source, targets) in &source_keys {
+                    let (to, am) = targets.get(r as usize).unwrap();
+                    let tx_object = TransactionParameters {
+                        to: Some(*to),
+                        value: *am,
+                        chain_id: Some(chain_id.as_u64()),
+                        gas_price: Some(gas_price),
+                        //nonce: Some(*nonce.borrow()),
+                        ..Default::default()
+                    };
+                    let signed = accounts.sign_transaction(tx_object, source);
+                    signed_txns.push(signed);
+                }
+
+                rt.block_on(async {
+                    let _ = client.transport().submit_batch().await.unwrap();
+                    for signed in signed_txns {
+                        let signed = signed.await.unwrap();
+                        let _ = client.eth().send_raw_transaction(signed.raw_transaction).await;
+                    }
                 });
                 let elapsed = now.elapsed().as_secs();
-                info!("round {}/{} time {}", r + 1, count, elapsed);
+                info!("round {}/{}, used {} seconds", r+1, count, elapsed);
                 std::thread::sleep(Duration::from_secs(*delay));
             }
 
             let elapsed = now.elapsed().as_secs();
-            let end_height = client.block_number().unwrap();
+            let end_height = block_number;
 
             let avg = total as f64 / elapsed as f64;
             info!(
