@@ -297,7 +297,7 @@ fn main() -> web3::Result<()> {
         Some(Commands::Test {
             network,
             mode: _,
-            delay,
+            delay: _,
             max_parallelism,
             count,
             source,
@@ -379,9 +379,19 @@ fn main() -> web3::Result<()> {
             // one-thread per source key
             info!("starting tests...");
             let start_height = client.block_number().unwrap();
+            let mut last_height = start_height;
             let total = source_keys.len() * count as usize;
             let now = std::time::Instant::now();
             for r in 0..count {
+                loop {
+                    let current = client.block_number().unwrap();
+                    if current > last_height {
+                        last_height = current;
+                        break;
+                    } else {
+                        std::thread::sleep(Duration::from_secs(1));
+                    }
+                }
                 let now = std::time::Instant::now();
                 source_keys.par_iter().enumerate().for_each(|(i, (source, targets))| {
                     let targets = vec![*targets.get(r as usize).unwrap()];
@@ -392,7 +402,6 @@ fn main() -> web3::Result<()> {
                 });
                 let elapsed = now.elapsed().as_secs();
                 info!("round {}/{} time {}", r + 1, count, elapsed);
-                std::thread::sleep(Duration::from_secs(*delay));
             }
 
             let elapsed = now.elapsed().as_secs();
@@ -400,8 +409,8 @@ fn main() -> web3::Result<()> {
 
             let avg = total as f64 / elapsed as f64;
             info!(
-                "Test result summary: total,{},concurrency,{},TPS,{:.3},seconds,{},height,{},{}",
-                total, concurrences, avg, elapsed, start_height, end_height,
+                "Test result summary: total,{:?}/{},concurrency,{},TPS,{:.3},seconds,{},height,{},{}",
+                total_succeed, total, concurrences, avg, elapsed, start_height, end_height,
             );
             Ok(())
         }
