@@ -326,7 +326,7 @@ fn main() -> web3::Result<()> {
                 .unwrap();
             info!("thread pool size {}", max_pool_size);
 
-            let url = network.get_url().to_owned();
+            let url = network.get_url();
             let client = Arc::new(TestClient::setup(Some(url), timeout));
 
             info!("chain_id:     {}", client.chain_id().unwrap());
