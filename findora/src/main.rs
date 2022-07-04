@@ -308,10 +308,10 @@ fn main() -> web3::Result<()> {
         }) => {
             let max_par = *max_parallelism;
             let source_file = source;
-            let _block_time = Some(*block_time);
+            let block_time = Some(*block_time);
             let timeout = Some(*timeout);
             let count = *count;
-            let _need_retry = *need_retry;
+            let need_retry = *need_retry;
 
             let source_keys: Vec<KeyPair> =
                 serde_json::from_str(std::fs::read_to_string(source_file).unwrap().as_str()).unwrap();
@@ -329,10 +329,8 @@ fn main() -> web3::Result<()> {
             let url = network.get_url();
             let client = Arc::new(TestClient::setup(Some(url), timeout));
 
-            let chain_id = client.chain_id().unwrap().as_u64();
-            let gas_price = client.gas_price().unwrap();
-            info!("chain_id:     {}", chain_id);
-            info!("gas_price:    {}", gas_price);
+            info!("chain_id:     {}", client.chain_id().unwrap());
+            info!("gas_price:    {}", client.gas_price().unwrap());
             info!("block_number: {}", client.block_number().unwrap());
             info!("frc20 code:   {:?}", client.frc20_code().unwrap());
 
@@ -385,17 +383,12 @@ fn main() -> web3::Result<()> {
             let now = std::time::Instant::now();
             for r in 0..count {
                 let now = std::time::Instant::now();
-                client.rt.block_on(async {
-                    for ((source_sk, _), targets) in &source_keys {
-                        let (target, amount) = *targets.get(r as usize).unwrap();
-                        match client.transfer(source_sk, target, amount, chain_id, gas_price).await {
-                            Ok(hash) => {
-                                debug!("sent {} successfully", hash);
-                                total_succeed.fetch_add(1, Relaxed);
-                            }
-                            Err(e) => error!("failed to send {}", e),
-                        }
-                    }
+                source_keys.par_iter().enumerate().for_each(|(i, (source, targets))| {
+                    let targets = vec![*targets.get(r as usize).unwrap()];
+                    let metrics = client
+                        .distribution(i + 1, Some(*source), &targets, &block_time, false, need_retry)
+                        .unwrap();
+                    total_succeed.fetch_add(metrics.succeed, Relaxed);
                 });
                 let elapsed = now.elapsed().as_secs();
                 info!("round {}/{} time {}", r + 1, count, elapsed);
@@ -407,8 +400,8 @@ fn main() -> web3::Result<()> {
 
             let avg = total as f64 / elapsed as f64;
             info!(
-                "Test result summary: total,{:?}/{},concurrency,{},TPS,{:.3},seconds,{},height,{},{}",
-                total_succeed, total, concurrences, avg, elapsed, start_height, end_height,
+                "Test result summary: total,{},concurrency,{},TPS,{:.3},seconds,{},height,{},{}",
+                total, concurrences, avg, elapsed, start_height, end_height,
             );
             Ok(())
         }

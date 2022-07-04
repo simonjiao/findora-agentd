@@ -91,7 +91,7 @@ pub struct TestClient {
     pub root_sk: secp256k1::SecretKey,
     pub root_addr: Address,
     pub overflow_flag: AtomicUsize,
-    pub rt: Runtime,
+    rt: Runtime,
 }
 
 #[derive(Debug)]
@@ -114,7 +114,7 @@ impl TestClient {
         let eth = Arc::new(web3.eth());
         let accounts = Arc::new(web3.accounts());
         let (root_sk, root_addr) = extract_keypair_from_file(".secret");
-        let rt = tokio::runtime::Builder::new_multi_thread()
+        let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap();
@@ -273,34 +273,6 @@ impl TestClient {
             }
             None => Error::Unknown("empty error".to_string()),
         }
-    }
-
-    pub async fn transfer(
-        &self,
-        source_sk: &secp256k1::SecretKey,
-        target: Address,
-        amount: U256,
-        chain_id: u64,
-        gas_price: U256,
-    ) -> Result<H256> {
-        let txn_object = TransactionParameters {
-            to: Some(target),
-            value: amount,
-            chain_id: Some(chain_id),
-            gas_price: Some(gas_price),
-            ..Default::default()
-        };
-
-        let signed = self
-            .accounts
-            .sign_transaction(txn_object, source_sk)
-            .await
-            .map_err(|e| self.parse_error(e.source()))?;
-
-        self.eth
-            .send_raw_transaction(signed.raw_transaction)
-            .await
-            .map_err(|err| self.parse_error(err.source()))
     }
 
     pub fn distribution(
