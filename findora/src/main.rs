@@ -297,7 +297,7 @@ fn main() -> web3::Result<()> {
         Some(Commands::Test {
             network,
             mode: _,
-            delay: _,
+            delay,
             max_parallelism,
             count,
             source,
@@ -395,13 +395,15 @@ fn main() -> web3::Result<()> {
                 let now = std::time::Instant::now();
                 source_keys.par_iter().enumerate().for_each(|(i, (source, targets))| {
                     let targets = vec![*targets.get(r as usize).unwrap()];
-                    let metrics = client
-                        .distribution(i + 1, Some(*source), &targets, &block_time, false, need_retry)
-                        .unwrap();
-                    total_succeed.fetch_add(metrics.succeed, Relaxed);
+                    if let Ok(_metrics) =
+                        client.distribution_simple(i + 1, Some(*source), &targets, &block_time, false, need_retry)
+                    {
+                        total_succeed.fetch_add(1, Relaxed);
+                    }
                 });
                 let elapsed = now.elapsed().as_secs();
                 info!("round {}/{} time {}", r + 1, count, elapsed);
+                std::thread::sleep(Duration::from_secs(*delay));
             }
 
             let elapsed = now.elapsed().as_secs();

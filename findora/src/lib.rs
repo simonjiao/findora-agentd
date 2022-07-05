@@ -522,4 +522,117 @@ impl TestClient {
             txs: results,
         })
     }
+
+    pub fn distribution_simple(
+        &self,
+        _id: usize,
+        source: Option<(secp256k1::SecretKey, Address)>,
+        targets: &[(Address, U256)],
+        block_time: &Option<u64>,
+        need_wait: bool,
+        _need_retry: bool,
+    ) -> Result<TransferMetrics> {
+        let mut results = vec![];
+        let mut succeed = 0u64;
+        let total = targets.len();
+        let source_address = source.unwrap_or((self.root_sk, self.root_addr)).1;
+        let source_sk = source.unwrap_or((self.root_sk, self.root_addr)).0;
+        let wait_time = block_time.unwrap_or(BLOCK_TIME) * 3 + 1;
+        let chain_id = self.chain_id().map(|id| id.as_u64());
+        let gas_price = self.gas_price();
+        let nonce = RefCell::new(self.pending_nonce(source_address).unwrap());
+        //let last_err_cnt = RefCell::new(0u64);
+        for (idx, (tx_object, mut metric)) in targets
+            .iter()
+            .map(|(account, am)| {
+                let to = Some(*account);
+                let tm = TxMetric {
+                    to: to.unwrap(),
+                    amount: *am,
+                    status: 99,
+                    ..Default::default()
+                };
+                let tp = TransactionParameters {
+                    to,
+                    value: *am,
+                    chain_id,
+                    gas_price,
+                    nonce: Some(*nonce.borrow()),
+                    ..Default::default()
+                };
+                (tp, tm)
+            })
+            .enumerate()
+        {
+            // Sign the txs (can be done offline)
+            if let Ok(signed) = self
+                .rt
+                .block_on(self.accounts.sign_transaction(tx_object.clone(), &source_sk))
+            {
+                let result = self.rt.block_on(self.eth.send_raw_transaction(signed.raw_transaction));
+                if let Err(e) = result {
+                    return Err(self.parse_error(e.source()));
+                }
+                if let Ok(hash) = result {
+                    metric.hash = Some(hash);
+                    debug!("{}/{} {:?} {:?}", idx + 1, total, metric.to, hash);
+                }
+            }
+
+            results.push(metric);
+        }
+
+        if !need_wait {
+            return Ok(TransferMetrics {
+                from: source_address,
+                total: total as u64,
+                succeed,
+                txs: results,
+            });
+        }
+
+        info!("Waiting for final results...");
+
+        results.iter_mut().enumerate().for_each(|(idx, metric)| {
+            let mut retry = wait_time;
+            loop {
+                if let Some(hash) = metric.hash {
+                    if let Some(receipt) = self.transaction_receipt(hash) {
+                        if let Some(status) = receipt.status {
+                            if status == U64::from(1u64) {
+                                succeed += 1;
+                                metric.status = 1;
+                            }
+                        }
+                        metric.wait = wait_time + 1 - retry;
+                        break;
+                    } else {
+                        std::thread::sleep(Duration::from_secs(1));
+                        retry -= 1;
+                        if retry == 0 {
+                            metric.wait = wait_time;
+                            break;
+                        }
+                    }
+                }
+            }
+            println!(
+                "{}/{} {:?} {:?} {}",
+                idx,
+                total,
+                metric.to,
+                metric.hash,
+                metric.status == 1
+            );
+        });
+
+        info!("Tx succeeded: {}/{}", succeed, total);
+
+        Ok(TransferMetrics {
+            from: source_address,
+            total: total as u64,
+            succeed,
+            txs: results,
+        })
+    }
 }
