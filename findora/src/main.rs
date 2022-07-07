@@ -396,9 +396,13 @@ fn main() -> web3::Result<()> {
                 }
                 let now = std::time::Instant::now();
                 source_keys.par_iter().for_each(|(source, targets)| {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .unwrap();
                     let target = targets.get(r as usize).unwrap();
-                    if client
-                        .distribution_simple(Some(*source), target, Some(chain_id), Some(gas_price))
+                    if rt
+                        .block_on(client.distribution_simple(Some(*source), target, Some(chain_id), Some(gas_price)))
                         .is_ok()
                     {
                         total_succeed.fetch_add(1, Relaxed);
