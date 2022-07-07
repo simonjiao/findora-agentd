@@ -523,7 +523,7 @@ impl TestClient {
         })
     }
 
-    pub async fn distribution_simple(
+    pub fn distribution_simple(
         &self,
         source: Option<(secp256k1::SecretKey, Address)>,
         target: &(Address, U256),
@@ -532,24 +532,20 @@ impl TestClient {
     ) -> Result<H256> {
         let source_address = source.unwrap_or((self.root_sk, self.root_addr)).1;
         let source_sk = source.unwrap_or((self.root_sk, self.root_addr)).0;
-        let nonce = self
-            .eth
-            .transaction_count(source_address, Some(BlockNumber::Pending))
-            .await
-            .unwrap();
+        let nonce = RefCell::new(self.pending_nonce(source_address).unwrap());
         let (account, amount) = target;
         let tx_object = TransactionParameters {
             to: Some(*account),
             value: *amount,
             chain_id,
             gas_price,
-            nonce: Some(nonce),
+            nonce: Some(*nonce.borrow()),
             ..Default::default()
         };
         // Sign the txs (can be done offline)
-        match self.accounts.sign_transaction(tx_object, &source_sk).await {
+        match self.rt.block_on(self.accounts.sign_transaction(tx_object, &source_sk)) {
             Ok(signed) => {
-                let result = self.eth.send_raw_transaction(signed.raw_transaction).await;
+                let result = self.rt.block_on(self.eth.send_raw_transaction(signed.raw_transaction));
                 match result {
                     Err(e) => Err(self.parse_error(e.source())),
                     Ok(hash) => Ok(hash),
