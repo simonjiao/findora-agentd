@@ -395,16 +395,13 @@ fn main() -> web3::Result<()> {
                     }
                 }
                 let now = std::time::Instant::now();
-                client.rt.block_on(async {
-                    for (source, targets) in &source_keys {
-                        let target = targets.get(r as usize).unwrap();
-                        if client
-                            .distribution_simple(Some(*source), target, Some(chain_id), Some(gas_price))
-                            .await
-                            .is_ok()
-                        {
-                            total_succeed.fetch_add(1, Relaxed);
-                        }
+                source_keys.par_iter().for_each(|(source, targets)| {
+                    let target = targets.get(r as usize).unwrap();
+                    if client
+                        .distribution_simple(Some(*source), target, Some(chain_id), Some(gas_price))
+                        .is_ok()
+                    {
+                        total_succeed.fetch_add(1, Relaxed);
                     }
                 });
                 let elapsed = now.elapsed().as_secs();
