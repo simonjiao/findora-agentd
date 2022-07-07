@@ -250,7 +250,7 @@ fn main() -> web3::Result<()> {
             redeposit,
         }) => {
             fund_accounts(
-                network.as_ref(),
+                network.get_url().as_str(),
                 *timeout,
                 *block_time,
                 *count,
@@ -265,11 +265,11 @@ fn main() -> web3::Result<()> {
             timeout,
             account,
         }) => {
-            eth_account(network.as_ref(), *timeout, *account);
+            eth_account(network.get_url().as_str(), *timeout, *account);
             Ok(())
         }
         Some(Commands::Transaction { network, timeout, hash }) => {
-            eth_transaction(network.as_ref(), *timeout, *hash);
+            eth_transaction(network.get_url().as_str(), *timeout, *hash);
             Ok(())
         }
         Some(Commands::Block {
@@ -278,7 +278,7 @@ fn main() -> web3::Result<()> {
             start,
             count,
         }) => {
-            eth_blocks(network.as_ref(), *timeout, *start, *count);
+            eth_blocks(network.get_url().as_str(), *timeout, *start, *count);
             Ok(())
         }
         Some(Commands::Etl {
@@ -298,7 +298,7 @@ fn main() -> web3::Result<()> {
             network,
             mode: _,
             delay,
-            max_parallelism,
+            max_threads,
             count,
             source,
             block_time,
@@ -306,12 +306,12 @@ fn main() -> web3::Result<()> {
             need_retry,
             check_balance,
         }) => {
-            let max_par = *max_parallelism;
+            let max_par = *max_threads;
             let source_file = source;
-            let block_time = Some(*block_time);
+            let _block_time = Some(*block_time);
             let timeout = Some(*timeout);
             let count = *count;
-            let need_retry = *need_retry;
+            let _need_retry = *need_retry;
 
             let source_keys: Vec<KeyPair> =
                 serde_json::from_str(std::fs::read_to_string(source_file).unwrap().as_str()).unwrap();
@@ -329,8 +329,10 @@ fn main() -> web3::Result<()> {
             let url = network.get_url();
             let client = Arc::new(TestClient::setup(Some(url), timeout));
 
-            info!("chain_id:     {}", client.chain_id().unwrap());
-            info!("gas_price:    {}", client.gas_price().unwrap());
+            let chain_id = client.chain_id().unwrap().as_u64();
+            let gas_price = client.gas_price().unwrap();
+            info!("chain_id:     {}", chain_id);
+            info!("gas_price:    {}", gas_price);
             info!("block_number: {}", client.block_number().unwrap());
             info!("frc20 code:   {:?}", client.frc20_code().unwrap());
 
@@ -393,10 +395,11 @@ fn main() -> web3::Result<()> {
                     }
                 }
                 let now = std::time::Instant::now();
-                source_keys.par_iter().enumerate().for_each(|(i, (source, targets))| {
-                    let targets = vec![*targets.get(r as usize).unwrap()];
-                    if let Ok(_metrics) =
-                        client.distribution_simple(i + 1, Some(*source), &targets, &block_time, false, need_retry)
+                source_keys.par_iter().for_each(|(source, targets)| {
+                    let target = targets.get(r as usize).unwrap();
+                    if client
+                        .distribution_simple(Some(*source), target, Some(chain_id), Some(gas_price))
+                        .is_ok()
                     {
                         total_succeed.fetch_add(1, Relaxed);
                     }

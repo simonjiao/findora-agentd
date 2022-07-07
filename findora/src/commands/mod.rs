@@ -317,7 +317,7 @@ pub enum Commands {
     Fund {
         /// ethereum-compatible network
         #[clap(long)]
-        network: String,
+        network: Network,
 
         /// http request timeout, seconds
         #[clap(long)]
@@ -347,7 +347,7 @@ pub enum Commands {
     Info {
         /// ethereum-compatible network
         #[clap(long)]
-        network: String,
+        network: Network,
 
         /// http request timeout, seconds
         #[clap(long)]
@@ -362,7 +362,7 @@ pub enum Commands {
     Transaction {
         /// ethereum-compatible network
         #[clap(long)]
-        network: String,
+        network: Network,
 
         /// http request timeout, seconds
         #[clap(long)]
@@ -377,7 +377,7 @@ pub enum Commands {
     Block {
         /// ethereum-compatible network
         #[clap(long)]
-        network: String,
+        network: Network,
 
         /// http request timeout, seconds
         #[clap(long)]
@@ -436,9 +436,9 @@ pub enum Commands {
         #[clap(long, default_value_t = 15)]
         delay: u64,
 
-        /// The maximum parallelism
+        /// The max thread pool size
         #[clap(long, default_value_t = 200)]
-        max_parallelism: u64,
+        max_threads: u64,
 
         /// The count of transactions sent by a source key
         #[clap(long, default_value_t = 0)]
