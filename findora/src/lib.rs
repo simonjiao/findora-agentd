@@ -532,14 +532,14 @@ impl TestClient {
     ) -> Result<H256> {
         let source_address = source.unwrap_or((self.root_sk, self.root_addr)).1;
         let source_sk = source.unwrap_or((self.root_sk, self.root_addr)).0;
-        let nonce = RefCell::new(self.pending_nonce(source_address).unwrap());
+        let nonce = self.pending_nonce(source_address).unwrap();
         let (account, amount) = target;
         let tx_object = TransactionParameters {
             to: Some(*account),
             value: *amount,
             chain_id,
             gas_price,
-            nonce: Some(*nonce.borrow()),
+            nonce: Some(nonce),
             ..Default::default()
         };
         // Sign the txs (can be done offline)
