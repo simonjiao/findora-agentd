@@ -349,19 +349,20 @@ fn main() -> web3::Result<()> {
                     } else {
                         U256::MAX
                     };
-                    if balance <= target_amount.mul(count) {
-                        None
-                    } else {
-                        let target = (0..count)
-                            .map(|_| {
-                                (
-                                    Address::from_str(one_eth_key().address.as_str()).unwrap(),
-                                    target_amount,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        debug!("account {:?} added to source pool", address);
-                        Some(((secret, address), target))
+                    match client.pending_nonce(address) {
+                        Some(nonce) if balance > target_amount.mul(count) => {
+                            let target = (0..count)
+                                .map(|_| {
+                                    (
+                                        Address::from_str(one_eth_key().address.as_str()).unwrap(),
+                                        target_amount,
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+                            debug!("account {:?} added to source pool", address);
+                            Some((secret, address, nonce, target))
+                        }
+                        _ => None,
                     }
                 })
                 .collect::<Vec<_>>();
@@ -395,13 +396,15 @@ fn main() -> web3::Result<()> {
                     }
                 }
                 let now = std::time::Instant::now();
-                source_keys.par_iter().for_each(|(source, targets)| {
+                source_keys.par_iter().for_each(|(source, address, _, targets)| {
                     let target = targets.get(r as usize).unwrap();
-                    if client
-                        .distribution_simple(Some(*source), target, Some(chain_id), Some(gas_price))
-                        .is_ok()
-                    {
-                        total_succeed.fetch_add(1, Relaxed);
+                    if let Some(nonce) = client.pending_nonce(*address) {
+                        if client
+                            .distribution_simple(source, target, Some(chain_id), Some(gas_price), Some(nonce))
+                            .is_ok()
+                        {
+                            total_succeed.fetch_add(1, Relaxed);
+                        }
                     }
                 });
                 let elapsed = now.elapsed().as_secs();

@@ -525,25 +525,23 @@ impl TestClient {
 
     pub fn distribution_simple(
         &self,
-        source: Option<(secp256k1::SecretKey, Address)>,
+        source: &secp256k1::SecretKey,
         target: &(Address, U256),
         chain_id: Option<u64>,
         gas_price: Option<U256>,
+        nonce: Option<U256>,
     ) -> Result<H256> {
-        let source_address = source.unwrap_or((self.root_sk, self.root_addr)).1;
-        let source_sk = source.unwrap_or((self.root_sk, self.root_addr)).0;
-        let nonce = self.pending_nonce(source_address).unwrap();
         let (account, amount) = target;
         let tx_object = TransactionParameters {
             to: Some(*account),
             value: *amount,
             chain_id,
             gas_price,
-            nonce: Some(nonce),
+            nonce,
             ..Default::default()
         };
         // Sign the txs (can be done offline)
-        match self.rt.block_on(self.accounts.sign_transaction(tx_object, &source_sk)) {
+        match self.rt.block_on(self.accounts.sign_transaction(tx_object, source)) {
             Ok(signed) => {
                 let result = self.rt.block_on(self.eth.send_raw_transaction(signed.raw_transaction));
                 match result {
