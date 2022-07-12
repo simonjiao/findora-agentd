@@ -7,7 +7,7 @@ use std::{
     cmp::Ordering,
     ops::{Mul, MulAssign, Sub},
     str::FromStr,
-    sync::{atomic::AtomicU64, atomic::Ordering::Relaxed, mpsc, Arc},
+    sync::{atomic::AtomicU64, atomic::Ordering::Relaxed, mpsc, Arc, Mutex},
     time::Duration,
 };
 
@@ -360,7 +360,7 @@ fn main() -> web3::Result<()> {
                                 })
                                 .collect::<Vec<_>>();
                             debug!("account {:?} added to source pool", address);
-                            Some((secret, address, nonce, target))
+                            Some((secret, address, Mutex::new(Some(nonce)), target))
                         }
                         _ => None,
                     }
@@ -396,14 +396,21 @@ fn main() -> web3::Result<()> {
                     }
                 }
                 let now = std::time::Instant::now();
-                source_keys.par_iter().for_each(|(source, address, _, targets)| {
+                source_keys.par_iter().for_each(|(source, address, nonce, targets)| {
                     let target = targets.get(r as usize).unwrap();
-                    if let Some(nonce) = client.pending_nonce(*address) {
+                    let mut nonce_guard = nonce.lock().unwrap();
+                    if nonce_guard.is_none() {
+                        *nonce_guard = client.pending_nonce(*address);
+                    }
+                    if let Some(nonce) = nonce_guard.as_ref() {
                         if client
-                            .distribution_simple(source, target, Some(chain_id), Some(gas_price), Some(nonce))
+                            .distribution_simple(source, target, Some(chain_id), Some(gas_price), Some(*nonce))
                             .is_ok()
                         {
                             total_succeed.fetch_add(1, Relaxed);
+                            *nonce_guard = Some(nonce + 1);
+                        } else {
+                            *nonce_guard = None;
                         }
                     }
                 });
