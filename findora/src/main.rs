@@ -349,20 +349,19 @@ fn main() -> web3::Result<()> {
                     } else {
                         U256::MAX
                     };
-                    match client.pending_nonce(address) {
-                        Some(nonce) if balance > target_amount.mul(count) => {
-                            let target = (0..count)
-                                .map(|_| {
-                                    (
-                                        Address::from_str(one_eth_key().address.as_str()).unwrap(),
-                                        target_amount,
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            debug!("account {:?} added to source pool", address);
-                            Some((secret, address, nonce, target))
-                        }
-                        _ => None,
+                    if balance > target_amount.mul(count) {
+                        let target = (0..count)
+                            .map(|_| {
+                                (
+                                    Address::from_str(one_eth_key().address.as_str()).unwrap(),
+                                    target_amount,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        debug!("account {:?} added to source pool", address);
+                        Some((secret, address, target))
+                    } else {
+                        None
                     }
                 })
                 .collect::<Vec<_>>();
@@ -396,7 +395,7 @@ fn main() -> web3::Result<()> {
                     }
                 }
                 let now = std::time::Instant::now();
-                source_keys.par_iter().for_each(|(source, address, _, targets)| {
+                source_keys.par_iter().for_each(|(source, address, targets)| {
                     let target = targets.get(r as usize).unwrap();
                     if let Some(nonce) = client.pending_nonce(*address) {
                         if client
