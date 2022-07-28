@@ -1,9 +1,8 @@
 pub mod error;
 pub mod utils;
 
-use crate::error::InternalError;
 use crate::{
-    error::{Error, Result},
+    error::{Error, InternalError, Result},
     utils::extract_keypair_from_file,
 };
 use bip0039::{Count, Language, Mnemonic};
@@ -521,5 +520,35 @@ impl TestClient {
             succeed,
             txs: results,
         })
+    }
+
+    pub fn distribution_simple(
+        &self,
+        source: &secp256k1::SecretKey,
+        target: &(Address, U256),
+        chain_id: Option<u64>,
+        gas_price: Option<U256>,
+        nonce: Option<U256>,
+    ) -> Result<H256> {
+        let (account, amount) = target;
+        let tx_object = TransactionParameters {
+            to: Some(*account),
+            value: *amount,
+            chain_id,
+            gas_price,
+            nonce,
+            ..Default::default()
+        };
+        // Sign the txs (can be done offline)
+        match self.rt.block_on(self.accounts.sign_transaction(tx_object, source)) {
+            Ok(signed) => {
+                let result = self.rt.block_on(self.eth.send_raw_transaction(signed.raw_transaction));
+                match result {
+                    Err(e) => Err(self.parse_error(e.source())),
+                    Ok(hash) => Ok(hash),
+                }
+            }
+            Err(e) => Err(self.parse_error(e.source())),
+        }
     }
 }
