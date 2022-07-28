@@ -7,7 +7,10 @@ use std::{
     cmp::Ordering,
     ops::{Mul, MulAssign, Sub},
     str::FromStr,
-    sync::{atomic::AtomicU64, atomic::Ordering::Relaxed, mpsc, Arc},
+    sync::{
+        atomic::{AtomicU64, Ordering::Relaxed},
+        mpsc, Arc,
+    },
     time::Duration,
 };
 
@@ -83,14 +86,14 @@ fn eth_blocks(network: &str, timeout: Option<u64>, start: Option<u64>, count: Op
             .map(|c| match c.cmp(&0i64) {
                 Ordering::Equal => start..start + 1,
                 Ordering::Less => {
-                    let n = c.abs() as u64;
+                    let n = c.unsigned_abs() as u64;
                     if start > n {
                         start - n..start + 1
                     } else {
                         0..start + 1
                     }
                 }
-                Ordering::Greater => start..start + c.abs() as u64 + 1,
+                Ordering::Greater => start..start + c.unsigned_abs() as u64 + 1,
             })
             .unwrap_or_else(|| match client.block_number() {
                 Some(end) if start > end.as_u64() => {

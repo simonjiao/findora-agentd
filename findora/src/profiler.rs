@@ -23,7 +23,7 @@ pub fn set_profiler(endpoint: &str, status: bool) -> Result<()> {
         component: "profiler".to_string(),
         module: String::new(),
         submodule: String::new(),
-        parameters: serde_json::to_vec(&ProfilerParam{enable:status}).unwrap()
+        parameters: serde_json::to_vec(&ProfilerParam { enable: status }).unwrap(),
     };
     let client = reqwest::blocking::Client::new();
     let res = client.post(endpoint).json(&data).send().unwrap();

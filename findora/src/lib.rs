@@ -1,9 +1,8 @@
 pub mod error;
 pub mod utils;
 
-use crate::error::InternalError;
 use crate::{
-    error::{Error, Result},
+    error::{Error, InternalError, Result},
     utils::extract_keypair_from_file,
 };
 use bip0039::{Count, Language, Mnemonic};
